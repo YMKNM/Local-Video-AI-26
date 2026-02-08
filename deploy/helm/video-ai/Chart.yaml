@@ -1,0 +1,18 @@
+apiVersion: v2
+name: video-ai
+description: Enterprise AI Video Generation Platform Helm Chart
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - ai
+  - video
+  - generation
+  - nvidia
+  - cuda
+  - gpu
+  - diffusion
+maintainers:
+  - name: Video AI Team
+    email: team@video-ai.dev
+engine: gotpl

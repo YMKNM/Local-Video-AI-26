@@ -1,0 +1,53 @@
+{{- if .Values.persistence.models.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "video-ai.fullname" . }}-models
+  labels:
+    {{- include "video-ai.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.models.accessMode }}
+  {{- if .Values.persistence.models.storageClass }}
+  storageClassName: {{ .Values.persistence.models.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.models.size }}
+{{- end }}
+---
+{{- if .Values.persistence.outputs.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "video-ai.fullname" . }}-outputs
+  labels:
+    {{- include "video-ai.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.outputs.accessMode }}
+  {{- if .Values.persistence.outputs.storageClass }}
+  storageClassName: {{ .Values.persistence.outputs.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.outputs.size }}
+{{- end }}
+---
+{{- if .Values.persistence.cache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "video-ai.fullname" . }}-cache
+  labels:
+    {{- include "video-ai.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.cache.accessMode }}
+  {{- if .Values.persistence.cache.storageClass }}
+  storageClassName: {{ .Values.persistence.cache.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.cache.size }}
+{{- end }}

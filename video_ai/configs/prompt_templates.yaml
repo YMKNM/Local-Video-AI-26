@@ -1,0 +1,189 @@
+# Prompt expansion templates for Video AI System
+
+# Camera motion templates
+camera_motion:
+  static:
+    description: "Fixed camera position"
+    tags: ["static shot", "locked camera", "still frame"]
+  
+  pan_left:
+    description: "Camera pans from right to left"
+    tags: ["pan left", "horizontal movement", "tracking shot"]
+    
+  pan_right:
+    description: "Camera pans from left to right"
+    tags: ["pan right", "horizontal movement", "tracking shot"]
+    
+  tilt_up:
+    description: "Camera tilts upward"
+    tags: ["tilt up", "vertical movement", "reveal shot"]
+    
+  tilt_down:
+    description: "Camera tilts downward"
+    tags: ["tilt down", "vertical movement", "descending view"]
+    
+  zoom_in:
+    description: "Camera zooms into subject"
+    tags: ["zoom in", "push in", "close up transition"]
+    
+  zoom_out:
+    description: "Camera zooms out from subject"
+    tags: ["zoom out", "pull back", "wide reveal"]
+    
+  dolly_forward:
+    description: "Camera moves forward toward subject"
+    tags: ["dolly forward", "push in", "approaching shot"]
+    
+  dolly_backward:
+    description: "Camera moves backward from subject"
+    tags: ["dolly backward", "pull out", "retreating shot"]
+    
+  tracking:
+    description: "Camera follows moving subject"
+    tags: ["tracking shot", "follow shot", "parallel movement"]
+    
+  orbit:
+    description: "Camera orbits around subject"
+    tags: ["orbit shot", "rotating camera", "circular movement", "360 view"]
+    
+  crane_up:
+    description: "Camera rises vertically"
+    tags: ["crane up", "rising shot", "aerial reveal"]
+    
+  crane_down:
+    description: "Camera descends vertically"
+    tags: ["crane down", "descending shot", "landing view"]
+    
+  drone:
+    description: "Aerial drone perspective"
+    tags: ["drone shot", "aerial view", "bird's eye", "overhead"]
+    
+  handheld:
+    description: "Handheld camera movement"
+    tags: ["handheld", "shaky cam", "documentary style"]
+
+# Lighting templates
+lighting:
+  natural:
+    description: "Natural daylight"
+    tags: ["natural light", "daylight", "sun lit"]
+    
+  golden_hour:
+    description: "Warm sunset/sunrise lighting"
+    tags: ["golden hour", "warm light", "sunset glow", "sunrise"]
+    
+  blue_hour:
+    description: "Cool twilight lighting"
+    tags: ["blue hour", "twilight", "cool tones", "dusk"]
+    
+  night:
+    description: "Nighttime lighting"
+    tags: ["night", "dark", "low light", "nocturnal"]
+    
+  moonlight:
+    description: "Soft moonlight illumination"
+    tags: ["moonlight", "lunar glow", "silver light", "night sky"]
+    
+  neon:
+    description: "Colorful neon lighting"
+    tags: ["neon lights", "colorful", "cyberpunk", "urban night"]
+    
+  studio:
+    description: "Professional studio lighting"
+    tags: ["studio lighting", "three-point", "professional", "controlled"]
+    
+  dramatic:
+    description: "High contrast dramatic lighting"
+    tags: ["dramatic lighting", "high contrast", "chiaroscuro", "shadows"]
+    
+  soft:
+    description: "Soft diffused lighting"
+    tags: ["soft light", "diffused", "gentle", "even lighting"]
+    
+  backlit:
+    description: "Subject lit from behind"
+    tags: ["backlit", "silhouette", "rim light", "halo effect"]
+
+# Style templates
+styles:
+  cinematic:
+    description: "Film-like cinematic look"
+    tags: ["cinematic", "movie quality", "film grain", "widescreen"]
+    aspect_ratio: "21:9"
+    
+  documentary:
+    description: "Documentary realism"
+    tags: ["documentary", "realistic", "natural", "authentic"]
+    
+  anime:
+    description: "Japanese anime style"
+    tags: ["anime", "animated", "japanese animation", "cel shaded"]
+    
+  photorealistic:
+    description: "Hyper-realistic rendering"
+    tags: ["photorealistic", "hyperreal", "lifelike", "realistic"]
+    
+  artistic:
+    description: "Artistic painterly style"
+    tags: ["artistic", "painterly", "stylized", "fine art"]
+    
+  vintage:
+    description: "Retro vintage aesthetic"
+    tags: ["vintage", "retro", "old film", "nostalgic", "grain"]
+    
+  noir:
+    description: "Film noir style"
+    tags: ["film noir", "black and white", "high contrast", "moody"]
+    
+  sci_fi:
+    description: "Science fiction aesthetic"
+    tags: ["sci-fi", "futuristic", "science fiction", "high tech"]
+    
+  fantasy:
+    description: "Fantasy world aesthetic"
+    tags: ["fantasy", "magical", "ethereal", "mythical"]
+    
+  minimalist:
+    description: "Clean minimalist style"
+    tags: ["minimalist", "clean", "simple", "sparse"]
+
+# Subject categories for prompt enhancement
+subjects:
+  landscape:
+    tags: ["scenic", "vista", "environment", "nature"]
+    
+  urban:
+    tags: ["city", "urban", "metropolitan", "architecture"]
+    
+  portrait:
+    tags: ["person", "face", "character", "human"]
+    
+  action:
+    tags: ["movement", "dynamic", "action", "motion"]
+    
+  abstract:
+    tags: ["abstract", "conceptual", "non-representational"]
+    
+  nature:
+    tags: ["nature", "wildlife", "organic", "natural world"]
+    
+  technology:
+    tags: ["technology", "digital", "mechanical", "electronic"]
+
+# Motion intensity
+motion_intensity:
+  subtle:
+    speed_multiplier: 0.5
+    tags: ["subtle motion", "gentle", "slow"]
+    
+  moderate:
+    speed_multiplier: 1.0
+    tags: ["moderate motion", "steady", "natural pace"]
+    
+  dynamic:
+    speed_multiplier: 1.5
+    tags: ["dynamic", "energetic", "fast paced"]
+    
+  intense:
+    speed_multiplier: 2.0
+    tags: ["intense", "rapid", "action packed", "high energy"]

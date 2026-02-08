@@ -1,0 +1,97 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "video-ai.fullname" . }}-worker
+  labels:
+    {{- include "video-ai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "video-ai.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "video-ai.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "video-ai.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.security.podSecurityContext | nindent 8 }}
+      containers:
+        - name: worker
+          securityContext:
+            {{- toYaml .Values.security.containerSecurityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["celery"]
+          args:
+            - "-A"
+            - "api.celery_app"
+            - "worker"
+            - "--loglevel=info"
+            - "--concurrency={{ .Values.worker.concurrency }}"
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "max_split_size_mb:512"
+            - name: REDIS_URL
+              value: {{ include "video-ai.redisUrl" . }}
+            - name: CELERY_BROKER_URL
+              value: {{ include "video-ai.redisUrl" . | replace "/0" "/1" }}
+            - name: HF_HOME
+              value: /app/cache/huggingface
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+            - name: outputs
+              mountPath: /app/outputs
+            - name: cache
+              mountPath: /app/cache
+      volumes:
+        - name: models
+          {{- if .Values.persistence.models.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "video-ai.fullname" . }}-models
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: outputs
+          {{- if .Values.persistence.outputs.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "video-ai.fullname" . }}-outputs
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: cache
+          {{- if .Values.persistence.cache.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "video-ai.fullname" . }}-cache
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

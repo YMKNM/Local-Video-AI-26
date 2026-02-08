@@ -1,0 +1,59 @@
+# =============================================================================
+# Video AI Platform - Lightweight Development Compose
+# =============================================================================
+
+version: '3.9'
+
+services:
+  video-ai-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    image: video-ai:dev
+    container_name: video-ai-dev
+    
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_HOME=/app/cache/huggingface
+      - REDIS_URL=redis://redis:6379/0
+    
+    ports:
+      - "8000:8000"
+      - "8888:8888"  # Jupyter
+    
+    volumes:
+      - .:/app
+      - model-cache:/app/cache
+      - ./outputs:/app/outputs
+    
+    depends_on:
+      - redis
+    
+    networks:
+      - dev-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: video-ai-redis-dev
+    ports:
+      - "6379:6379"
+    networks:
+      - dev-network
+
+volumes:
+  model-cache:
+
+networks:
+  dev-network:
+    driver: bridge

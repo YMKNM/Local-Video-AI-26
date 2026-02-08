@@ -1,0 +1,214 @@
+# =============================================================================
+# Video AI Helm Chart - Default Values
+# =============================================================================
+
+# Global settings
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# =============================================================================
+# Image Configuration
+# =============================================================================
+image:
+  repository: video-ai/video-ai
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# =============================================================================
+# API Server Configuration
+# =============================================================================
+api:
+  replicaCount: 1
+  
+  resources:
+    requests:
+      memory: "8Gi"
+      cpu: "2000m"
+      nvidia.com/gpu: 1
+    limits:
+      memory: "32Gi"
+      cpu: "8000m"
+      nvidia.com/gpu: 1
+  
+  service:
+    type: ClusterIP
+    port: 8000
+    metricsPort: 9090
+  
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "500m"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    hosts:
+      - host: video-ai.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: video-ai-tls
+        hosts:
+          - video-ai.example.com
+  
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  env:
+    - name: ENVIRONMENT
+      value: "production"
+    - name: LOG_LEVEL
+      value: "INFO"
+    - name: CUDA_VISIBLE_DEVICES
+      value: "0"
+    - name: PYTORCH_CUDA_ALLOC_CONF
+      value: "max_split_size_mb:512"
+
+# =============================================================================
+# Worker Configuration
+# =============================================================================
+worker:
+  enabled: true
+  replicaCount: 1
+  
+  resources:
+    requests:
+      memory: "16Gi"
+      cpu: "4000m"
+      nvidia.com/gpu: 1
+    limits:
+      memory: "32Gi"
+      cpu: "12000m"
+      nvidia.com/gpu: 1
+  
+  concurrency: 2
+  
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 8
+    scaleDownStabilization: 300
+
+# =============================================================================
+# Redis Configuration
+# =============================================================================
+redis:
+  enabled: true
+  architecture: standalone
+  
+  auth:
+    enabled: false
+  
+  master:
+    persistence:
+      enabled: true
+      size: 10Gi
+    
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+
+# =============================================================================
+# Persistence Configuration
+# =============================================================================
+persistence:
+  models:
+    enabled: true
+    size: 100Gi
+    accessMode: ReadWriteMany
+    storageClass: ""
+  
+  outputs:
+    enabled: true
+    size: 500Gi
+    accessMode: ReadWriteMany
+    storageClass: ""
+  
+  cache:
+    enabled: true
+    size: 50Gi
+    accessMode: ReadWriteOnce
+    storageClass: ""
+
+# =============================================================================
+# Monitoring Configuration
+# =============================================================================
+monitoring:
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+  
+  grafana:
+    enabled: false
+    dashboards:
+      enabled: true
+
+# =============================================================================
+# Security Configuration
+# =============================================================================
+security:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop:
+        - ALL
+
+# =============================================================================
+# Node Selection
+# =============================================================================
+nodeSelector:
+  nvidia.com/gpu.product: "NVIDIA-GeForce-RTX-3080"
+
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: nvidia.com/gpu.present
+              operator: In
+              values:
+                - "true"
+
+# =============================================================================
+# Service Account
+# =============================================================================
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# =============================================================================
+# Network Policy
+# =============================================================================
+networkPolicy:
+  enabled: false
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx

@@ -1,0 +1,277 @@
+# Hardware Configuration for Video AI Enterprise Platform
+# Optimized for NVIDIA RTX 5080 + 32GB DDR5
+
+# =============================================================================
+# GPU Configuration - NVIDIA GeForce RTX 5080 (16GB VRAM)
+# =============================================================================
+gpu:
+  name: "NVIDIA GeForce RTX 5080"
+  vendor: "nvidia"
+  vram_gb: 16
+  compute_capability: "12.0"  # Blackwell architecture
+  backend: "cuda"  # Primary: CUDA
+  device_id: 0
+  
+  # CUDA-specific settings
+  cuda:
+    enabled: true
+    version_required: "12.8"
+    cudnn_version: "9.x"
+    
+  # TensorRT optimization
+  tensorrt:
+    enabled: true
+    version: "8.6"
+    fp16_mode: true
+    int8_mode: false  # Enable for maximum speed with calibration
+    workspace_size_gb: 4
+    
+  # Fallback backends (priority order)
+  fallback_backends:
+    - "cuda"
+    - "tensorrt"
+    - "onnxruntime-cuda"
+    - "cpu"
+
+# =============================================================================
+# CPU Configuration - Intel i5-12400
+# =============================================================================
+cpu:
+  name: "Intel Core i5-12400"
+  cores: 6
+  threads: 12
+  base_clock_ghz: 2.5
+  turbo_clock_ghz: 4.4
+  architecture: "Alder Lake"
+  avx512: false
+  avx2: true
+  
+# =============================================================================
+# System Memory - 32GB DDR4
+# =============================================================================
+system:
+  ram_total_gb: 32
+  min_ram_gb: 16
+  recommended_ram_gb: 32
+  model_cache_gb: 8
+  swap_usage: "minimal"  # minimal, moderate, aggressive
+
+# =============================================================================
+# VRAM Thresholds for Dynamic Scaling — Wan2.1-T2V-1.3B + CPU offload
+#
+# Wan2.1 VRAM usage is dominated by:
+#   ~5 GB   DiT transformer weights (bf16)
+#   variable latent tensor + activations  ≈ W*H*F * 1.4e-7 GB
+#
+# Examples (measured on RTX 5080 16 GB):
+#   832×480  × 33 frames →  ~10 GB peak  ✓
+#   832×480  × 81 frames →  ~14 GB peak  ✓
+#   1280×720 × 33 frames →  ~14 GB peak  ✓ (tight)
+#   1280×720 × 81 frames →  ~22 GB peak  ✗ OOM
+# =============================================================================
+vram_thresholds:
+  high: 20     # GB - can do 720p long clips
+  medium: 16   # GB - 480p safe, 720p short only
+  low: 12      # GB - 480p short clips
+  critical: 8  # GB - minimal 352p only
+
+# =============================================================================
+# Resolution Scaling based on Available VRAM
+# =============================================================================
+resolution_scaling:
+  # 20+ GB (e.g. RTX 3090/4090/A6000)
+  high_vram:
+    max_width: 1280
+    max_height: 720
+    max_frames: 81     # 5 s at 16 fps
+    max_fps: 16
+    chunk_size: 16
+
+  # 16-20 GB (RTX 5080 / 4080 — our primary target)
+  medium_vram:
+    max_width: 832
+    max_height: 480
+    max_frames: 81     # 5 s OK at 480p
+    max_fps: 16
+    chunk_size: 16
+
+  # 12-16 GB
+  low_vram:
+    max_width: 832
+    max_height: 480
+    max_frames: 49     # 3 s max
+    max_fps: 16
+    chunk_size: 16
+
+  # <12 GB — very tight
+  critical_vram:
+    max_width: 624
+    max_height: 352
+    max_frames: 33     # 2 s max
+    max_fps: 16
+    chunk_size: 16
+    use_cpu_offload: true
+
+# =============================================================================
+# CUDA/TensorRT Optimization Settings
+# =============================================================================
+cuda_settings:
+  stream_count: 4
+  enable_cudnn_benchmark: true
+  enable_tf32: true  # RTX 30 series TF32 acceleration
+  memory_pool: "cuda_malloc_async"
+  enable_flash_attention: true
+  
+tensorrt_settings:
+  enabled: true
+  cache_dir: "cache/tensorrt"
+  precision: "fp16"  # fp32, fp16, int8
+  max_batch_size: 4
+  optimization_level: 5  # 0-5, higher = more optimization time
+  timing_cache: true
+  
+# Quantization settings for inference speed
+quantization:
+  enabled: true
+  default_precision: "fp16"
+  supported_precisions:
+    - "fp32"
+    - "fp16"
+    - "bf16"  # Limited on RTX 3080
+    - "int8"  # Requires calibration
+    - "nvfp8"  # Future NVIDIA formats
+  dynamic_quantization: true
+  calibration_samples: 512
+
+# =============================================================================
+# Memory Optimization
+# =============================================================================
+memory_optimization:
+  enabled: true
+  gradient_checkpointing: true
+  attention_slicing: true
+  vae_slicing: true
+  vae_tiling: true
+  sequential_cpu_offload: false  # Use when VRAM is critical
+  model_cpu_offload: false
+  enable_xformers: true  # Memory-efficient attention
+  chunk_processing: true
+  
+# =============================================================================
+# Performance Tuning
+# =============================================================================
+performance:
+  batch_size: 1
+  prefetch_models: true
+  model_precision: "fp16"
+  enable_memory_optimization: true
+  garbage_collect_interval: 10
+  num_workers: 4  # DataLoader workers
+  pin_memory: true
+  non_blocking_transfer: true
+  
+  # Inference optimization
+  inference:
+    compile_mode: "reduce-overhead"  # torch.compile mode
+    use_channels_last: true
+    enable_cudagraphs: true
+    warmup_iterations: 3
+    
+# =============================================================================
+# Scheduler Configuration (GPU/TPU Dispatch)
+# =============================================================================
+scheduler:
+  type: "priority_queue"
+  max_concurrent_jobs: 2
+  job_timeout_seconds: 3600
+  preemption_enabled: true
+  
+  # Priority levels
+  priorities:
+    realtime: 100
+    high: 75
+    normal: 50
+    low: 25
+    background: 10
+    
+  # Resource allocation
+  allocation:
+    preview_mode:
+      vram_limit_gb: 3
+      time_limit_seconds: 30
+    standard_mode:
+      vram_limit_gb: 7
+      time_limit_seconds: 300
+    quality_mode:
+      vram_limit_gb: 9
+      time_limit_seconds: 1800
+
+# =============================================================================
+# Caching Configuration
+# =============================================================================
+caching:
+  enabled: true
+  cache_dir: "cache"
+  
+  # Model caching
+  model_cache:
+    enabled: true
+    max_size_gb: 20
+    eviction_policy: "lru"
+    
+  # Latent caching for progressive preview
+  latent_cache:
+    enabled: true
+    max_entries: 100
+    ttl_seconds: 3600
+    
+  # Compiled model cache
+  compiled_cache:
+    enabled: true
+    cache_dir: "cache/compiled"
+    
+# =============================================================================
+# Progressive Preview Configuration (~30 sec target)
+# =============================================================================
+progressive_preview:
+  enabled: true
+  target_time_seconds: 30
+  
+  # Fast preview settings
+  preview_settings:
+    resolution_scale: 0.25  # 1/4 resolution
+    steps_scale: 0.3       # 30% of full steps
+    skip_refinement: true
+    use_fast_sampler: true  # LCM/Turbo sampler
+    
+  # Chunked synthesis
+  chunked_synthesis:
+    enabled: true
+    chunk_duration_seconds: 2
+    overlap_frames: 4
+    
+# =============================================================================
+# Multi-GPU Configuration (Future Expansion)
+# =============================================================================
+multi_gpu:
+  enabled: false
+  strategy: "data_parallel"  # data_parallel, model_parallel, pipeline
+  devices: [0]  # GPU device IDs
+  
+# =============================================================================
+# Cloud/Enterprise Scaling
+# =============================================================================
+scaling:
+  mode: "single"  # single, cluster, cloud
+  
+  # Kubernetes settings (when mode=cluster)
+  kubernetes:
+    enabled: false
+    namespace: "video-ai"
+    gpu_resource: "nvidia.com/gpu"
+    
+  # Cloud provider settings (when mode=cloud)
+  cloud:
+    provider: null  # aws, gcp, azure
+    instance_type: null
+    spot_instances: false

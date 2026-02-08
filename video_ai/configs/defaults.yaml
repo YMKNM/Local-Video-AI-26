@@ -1,0 +1,104 @@
+# Default Generation Settings for Video AI System
+
+# Generation defaults  (Wan2.1-T2V compatible)
+generation:
+  # Video parameters
+  duration_seconds: 2
+  fps: 16
+  width: 832
+  height: 480
+  
+  # Diffusion parameters
+  num_inference_steps: 30
+  guidance_scale: 5.0
+  seed: null  # null = random seed
+  
+  # Quality settings
+  quality_preset: "balanced"  # fast, balanced, quality
+  
+# Quality presets  (Wan2.1-compatible resolutions: multiples of 16)
+presets:
+  fast:
+    num_inference_steps: 15
+    guidance_scale: 5.0
+    width: 624
+    height: 352
+  balanced:
+    num_inference_steps: 30
+    guidance_scale: 5.0
+    width: 832
+    height: 480
+  quality:
+    num_inference_steps: 50
+    guidance_scale: 5.0
+    width: 832
+    height: 480
+
+# Prompt expansion settings
+prompt_expansion:
+  enabled: true
+  add_quality_tags: true
+  add_camera_motion: true
+  add_lighting: true
+  
+  # Default quality tags added to prompts
+  quality_tags:
+    - "high quality"
+    - "detailed"
+    - "professional"
+    
+  # Default negative prompt elements
+  negative_prompt_defaults:
+    - "blurry"
+    - "low quality"
+    - "distorted"
+    - "watermark"
+    - "text"
+    - "logo"
+    - "artifact"
+    - "noise"
+
+# Output settings
+output:
+  directory: "outputs"
+  filename_pattern: "{timestamp}_{seed}_{prompt_slug}"
+  format: "mp4"
+  
+  # Video encoding
+  codec: "h264"
+  bitrate: "8M"
+  pixel_format: "yuv420p"
+  
+  # Frame output (intermediate)
+  save_frames: false
+  frame_format: "png"
+  frame_directory: "outputs/frames"
+
+# Logging settings
+logging:
+  level: "INFO"
+  save_logs: true
+  log_directory: "logs"
+  log_generation_metadata: true
+  
+# Metadata settings
+metadata:
+  save_metadata: true
+  metadata_format: "json"
+  include_expanded_prompt: true
+  include_model_info: true
+  include_hardware_info: true
+
+# Post-processing (Phase 2)
+post_processing:
+  enabled: false
+  frame_interpolation: false
+  upscaling: false
+  color_grading: false
+  
+# Retry settings
+retry:
+  max_attempts: 3
+  retry_on_oom: true
+  reduce_resolution_on_retry: true
+  reduce_frames_on_retry: true

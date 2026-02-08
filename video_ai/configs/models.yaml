@@ -1,0 +1,407 @@
+# =============================================================================
+# Model Configuration for Video AI Enterprise Platform
+# Supports state-of-the-art open-source video generation models
+# =============================================================================
+
+# Active model configuration (default selections)
+active_models:
+  text_encoder: "t5-xxl"
+  video_diffusion: "wan2.1-t2v-1.3b"
+  vae: "wan-vae"
+  scheduler: "flow_matching"
+  audio_encoder: "clap"
+  fast_preview: "accvideo"
+
+# Model tiers for resource-based switching
+model_tiers:
+  # Tier 1: Maximum quality (requires 8GB+ VRAM)
+  enterprise:
+    - "hunyuan-video"
+    - "ltx-video-2"
+    - "genmo-mochi"
+  # Tier 2: Balanced quality/speed (requires 6GB+ VRAM)
+  standard:
+    - "ltx-video-2b"
+    - "cogvideox-5b"
+  # Tier 3: Fast preview/prototyping (requires 4GB+ VRAM)
+  fast:
+    - "accvideo"
+    - "animatediff-lcm"
+  # Tier 4: Minimal resources (CPU fallback capable)
+  minimal:
+    - "zeroscope-v2"
+
+# =============================================================================
+# Text Encoder Models
+# =============================================================================
+text_encoders:
+  t5-xxl:
+    name: "T5-XXL Encoder"
+    type: "t5"
+    path: "models/text_encoder/t5-xxl"
+    onnx_path: "models/text_encoder/t5-xxl/model.onnx"
+    embedding_dim: 4096
+    max_tokens: 512
+    license: "Apache-2.0"
+    source: "google/t5-xxl"
+    vram_requirement_gb: 2.5
+    precision: "fp16"
+    
+  clip-vit-large:
+    name: "CLIP ViT-L/14"
+    type: "clip"
+    path: "models/text_encoder/clip-vit-large"
+    onnx_path: "models/text_encoder/clip-vit-large/model.onnx"
+    embedding_dim: 768
+    max_tokens: 77
+    license: "MIT"
+    source: "openai/clip-vit-large-patch14"
+    vram_requirement_gb: 0.8
+    
+  t5-base:
+    name: "T5 Base Encoder"
+    type: "t5"
+    path: "models/text_encoder/t5-base"
+    onnx_path: "models/text_encoder/t5-base/model.onnx"
+    embedding_dim: 768
+    max_tokens: 512
+    license: "Apache-2.0"
+    source: "google/t5-v1_1-base"
+    vram_requirement_gb: 0.4
+
+  clap:
+    name: "CLAP Audio-Text Encoder"
+    type: "clap"
+    path: "models/text_encoder/clap"
+    onnx_path: "models/text_encoder/clap/model.onnx"
+    embedding_dim: 512
+    max_tokens: 77
+    license: "Apache-2.0"
+    source: "laion/clap-htsat-unfused"
+    vram_requirement_gb: 0.5
+
+# =============================================================================
+# Video Diffusion Models - State of the Art
+# =============================================================================
+video_diffusion:
+  # LTX-Video 2 - Lightricks latest model
+  ltx-video-2:
+    name: "LTX-Video 2"
+    type: "ltx"
+    version: "2.0"
+    path: "models/video_diffusion/ltx-video-2"
+    onnx_path: "models/video_diffusion/ltx-video-2/model.onnx"
+    parameters: "5B"
+    default_steps: 30
+    default_cfg_scale: 7.0
+    flow_matching: true
+    supported_resolutions:
+      - [640, 480]
+      - [854, 480]
+      - [1280, 720]
+      - [1920, 1080]
+      - [2560, 1440]
+      - [3840, 2160]  # 4K support
+    max_frames: 257  # ~10+ seconds at 24fps
+    max_fps: 60
+    supported_modes:
+      - "text-to-video"
+      - "image-to-video"
+      - "video-to-video"
+    license: "Apache-2.0"
+    vram_requirement_gb: 8
+    temporal_coherence: "high"
+    
+  # HunyuanVideo - Tencent's model
+  hunyuan-video:
+    name: "HunyuanVideo"
+    type: "hunyuan"
+    version: "1.0"
+    path: "models/video_diffusion/hunyuan-video"
+    onnx_path: "models/video_diffusion/hunyuan-video/model.onnx"
+    parameters: "13B"
+    default_steps: 50
+    default_cfg_scale: 6.0
+    dit_architecture: true
+    supported_resolutions:
+      - [720, 480]
+      - [960, 544]
+      - [1280, 720]
+      - [1920, 1080]
+    max_frames: 129  # ~5 seconds at 24fps
+    max_fps: 30
+    supported_modes:
+      - "text-to-video"
+      - "image-to-video"
+    license: "Apache-2.0"
+    vram_requirement_gb: 10
+    temporal_coherence: "very_high"
+    
+  # Genmo Mochi - High quality open source
+  genmo-mochi:
+    name: "Genmo Mochi 1"
+    type: "mochi"
+    version: "1.0"
+    path: "models/video_diffusion/genmo-mochi"
+    onnx_path: "models/video_diffusion/genmo-mochi/model.onnx"
+    parameters: "10B"
+    default_steps: 64
+    default_cfg_scale: 4.5
+    asymmetric_attention: true
+    supported_resolutions:
+      - [848, 480]
+      - [1280, 720]
+      - [1920, 1080]
+    max_frames: 200
+    max_fps: 30
+    supported_modes:
+      - "text-to-video"
+    license: "Apache-2.0"
+    vram_requirement_gb: 9
+    temporal_coherence: "high"
+    
+  # AccVideo - Fast preview/prototyping
+  accvideo:
+    name: "AccVideo (Fast)"
+    type: "accvideo"
+    version: "1.0"
+    path: "models/video_diffusion/accvideo"
+    onnx_path: "models/video_diffusion/accvideo/model.onnx"
+    parameters: "1.5B"
+    default_steps: 8  # Very fast inference
+    default_cfg_scale: 5.0
+    lcm_distilled: true
+    supported_resolutions:
+      - [512, 320]
+      - [640, 480]
+      - [854, 480]
+      - [1024, 576]
+    max_frames: 64
+    max_fps: 24
+    supported_modes:
+      - "text-to-video"
+      - "image-to-video"
+    license: "Apache-2.0"
+    vram_requirement_gb: 4
+    temporal_coherence: "medium"
+    preview_mode: true  # Optimized for fast previews
+    
+  # Legacy/Fallback models
+  ltx-video-2b:
+    name: "LTX-Video 2B"
+    type: "ltx"
+    version: "1.0"
+    path: "models/video_diffusion/ltx-video-2b"
+    onnx_path: "models/video_diffusion/ltx-video-2b/model.onnx"
+    parameters: "2B"
+    default_steps: 30
+    default_cfg_scale: 7.5
+    supported_resolutions:
+      - [512, 288]
+      - [640, 360]
+      - [854, 480]
+      - [1280, 720]
+    max_frames: 150
+    license: "Apache-2.0"
+    vram_requirement_gb: 6
+    
+  cogvideox-5b:
+    name: "CogVideoX 5B"
+    type: "cogvideo"
+    version: "1.5"
+    path: "models/video_diffusion/cogvideox-5b"
+    onnx_path: "models/video_diffusion/cogvideox-5b/model.onnx"
+    parameters: "5B"
+    default_steps: 50
+    default_cfg_scale: 6.0
+    supported_resolutions:
+      - [720, 480]
+      - [1280, 720]
+    max_frames: 49
+    license: "Apache-2.0"
+    vram_requirement_gb: 7
+    
+  zeroscope-v2:
+    name: "ZeroScope V2 (Minimal)"
+    type: "zeroscope"
+    path: "models/video_diffusion/zeroscope-v2"
+    onnx_path: "models/video_diffusion/zeroscope-v2/model.onnx"
+    parameters: "1.7B"
+    default_steps: 40
+    default_cfg_scale: 7.5
+    supported_resolutions:
+      - [576, 320]
+      - [1024, 576]
+    max_frames: 36
+    license: "CC-BY-NC-4.0"
+    vram_requirement_gb: 3
+    cpu_compatible: true
+
+# =============================================================================
+# VAE Models
+# =============================================================================
+vae:
+  ltx-vae:
+    name: "LTX Video VAE"
+    type: "vae"
+    path: "models/vae/ltx-vae"
+    encoder_path: "models/vae/ltx-vae/encoder.onnx"
+    decoder_path: "models/vae/ltx-vae/decoder.onnx"
+    latent_channels: 16
+    temporal_compression: 8
+    spatial_compression: 8
+    scaling_factor: 0.18215
+    license: "Apache-2.0"
+    vram_requirement_gb: 1.5
+    
+  hunyuan-vae:
+    name: "HunyuanVideo VAE"
+    type: "vae"
+    path: "models/vae/hunyuan-vae"
+    encoder_path: "models/vae/hunyuan-vae/encoder.onnx"
+    decoder_path: "models/vae/hunyuan-vae/decoder.onnx"
+    latent_channels: 16
+    causal_temporal: true
+    scaling_factor: 0.7
+    license: "Apache-2.0"
+    vram_requirement_gb: 2.0
+
+  mochi-vae:
+    name: "Mochi Video VAE"
+    type: "vae"
+    path: "models/vae/mochi-vae"
+    encoder_path: "models/vae/mochi-vae/encoder.onnx"
+    decoder_path: "models/vae/mochi-vae/decoder.onnx"
+    latent_channels: 12
+    scaling_factor: 0.18
+    license: "Apache-2.0"
+    vram_requirement_gb: 1.8
+
+# =============================================================================
+# Audio Models (for synchronized audio)
+# =============================================================================
+audio_models:
+  audioldm2:
+    name: "AudioLDM2"
+    type: "audio_generation"
+    path: "models/audio/audioldm2"
+    onnx_path: "models/audio/audioldm2/model.onnx"
+    sample_rate: 16000
+    max_duration_seconds: 30
+    license: "Apache-2.0"
+    vram_requirement_gb: 2.0
+    
+  musicgen:
+    name: "MusicGen Medium"
+    type: "music_generation"
+    path: "models/audio/musicgen"
+    onnx_path: "models/audio/musicgen/model.onnx"
+    sample_rate: 32000
+    max_duration_seconds: 30
+    license: "Apache-2.0"
+    vram_requirement_gb: 3.0
+
+# =============================================================================
+# Auxiliary Models (Safety, Upscaling, etc.)
+# =============================================================================
+auxiliary:
+  # Content moderation
+  content_filter:
+    name: "NSFW Content Classifier"
+    path: "models/safety/nsfw-classifier"
+    onnx_path: "models/safety/nsfw-classifier/model.onnx"
+    threshold: 0.85
+    
+  # Deepfake detection
+  deepfake_detector:
+    name: "Deepfake Detector"
+    path: "models/safety/deepfake-detector"
+    onnx_path: "models/safety/deepfake-detector/model.onnx"
+    
+  # Upscaling
+  real_esrgan:
+    name: "Real-ESRGAN x4"
+    path: "models/upscale/real-esrgan-x4"
+    onnx_path: "models/upscale/real-esrgan-x4/model.onnx"
+    scale_factor: 4
+    vram_requirement_gb: 1.5
+    
+  # Frame interpolation
+  rife:
+    name: "RIFE Frame Interpolation"
+    path: "models/interpolation/rife"
+    onnx_path: "models/interpolation/rife/model.onnx"
+    vram_requirement_gb: 1.0
+
+# =============================================================================
+# Model Selection Strategy
+# =============================================================================
+selection_strategy:
+  # Auto-select based on VRAM
+  auto_select: true
+  
+  # Priority order for each use case
+  text_to_video:
+    quality: ["hunyuan-video", "genmo-mochi", "ltx-video-2"]
+    balanced: ["ltx-video-2", "cogvideox-5b", "ltx-video-2b"]
+    speed: ["accvideo", "zeroscope-v2"]
+    
+  image_to_video:
+    quality: ["ltx-video-2", "hunyuan-video"]
+    balanced: ["ltx-video-2b", "accvideo"]
+    speed: ["accvideo"]
+    
+  preview:
+    default: ["accvideo"]
+    
+# =============================================================================
+# Model Download Sources
+# =============================================================================
+download_sources:
+  huggingface:
+    base_url: "https://huggingface.co"
+    models:
+      ltx-video-2: "Lightricks/LTX-Video-2"
+      hunyuan-video: "tencent/HunyuanVideo"
+      genmo-mochi: "genmo/mochi-1-preview"
+      accvideo: "anonymous-ml/accvideo"
+      
+  modelscope:
+    base_url: "https://modelscope.cn"
+    models:
+      hunyuan-video: "tencent/HunyuanVideo"
+
+# Schedulers
+schedulers:
+  ddim:
+    name: "DDIM Scheduler"
+    type: "ddim"
+    num_train_timesteps: 1000
+    beta_start: 0.00085
+    beta_end: 0.012
+    beta_schedule: "scaled_linear"
+    clip_sample: false
+    set_alpha_to_one: false
+    
+  euler:
+    name: "Euler Scheduler"
+    type: "euler"
+    num_train_timesteps: 1000
+    beta_start: 0.00085
+    beta_end: 0.012
+    beta_schedule: "scaled_linear"
+    
+  euler_ancestral:
+    name: "Euler Ancestral Scheduler"
+    type: "euler_a"
+    num_train_timesteps: 1000
+    beta_start: 0.00085
+    beta_end: 0.012
+    beta_schedule: "scaled_linear"
+
+# Model download settings
+download:
+  cache_dir: "models/.cache"
+  verify_checksums: true
+  resume_downloads: true
+  max_retries: 3

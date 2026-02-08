@@ -1,0 +1,50 @@
+# ── Python ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+
+# ── Virtual environment ──────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Model weights (too large for git) ────────────────────────────
+models/wan2.1-t2v-1.3b/
+models/cogvideox-2b/
+models/cogvideox-5b/
+models/ltx-video-2b/
+models/text_encoder/
+models/vae/
+models/video_diffusion/
+
+# ── Outputs & caches ─────────────────────────────────────────────
+outputs/
+test_output/
+test_proof_videos/
+cache/
+logs/
+*.log
+
+# ── IDE / OS ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ── Pytest ───────────────────────────────────────────────────────
+.pytest_cache/
+
+# ── Docker (optional, keep compose files) ────────────────────────
+# docker-compose*.yml are tracked
+
+# ── Misc ─────────────────────────────────────────────────────────
+*.bak
+*.tmp
+download_cogvideo.log
