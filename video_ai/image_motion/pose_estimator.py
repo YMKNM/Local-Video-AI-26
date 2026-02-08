@@ -430,18 +430,55 @@ class PoseEstimator:
         return self._finalize_pose(keypoints, shape)
 
     def _parse_body_keypoints(self, body, shape: Tuple) -> PoseResult:
-        """Parse controlnet_aux body keypoints."""
-        keypoints = []
+        """Parse controlnet_aux body keypoints.
+
+        controlnet_aux 0.0.10's detect_poses() normalises x,y to [0,1]
+        and drops the original score (defaults to 1.0).  We detect this
+        by checking whether ALL coordinates are <= 1.0 and rescale to
+        pixel space.
+        """
+        h, w = shape[:2]
+        raw_kps: list = []
         for j in Joint:
             if hasattr(body, 'keypoints') and j.value < len(body.keypoints):
                 kp = body.keypoints[j.value]
                 if kp is not None:
-                    keypoints.append(Keypoint(float(kp.x), float(kp.y),
-                                              float(getattr(kp, 'score', 0.8))))
+                    raw_kps.append((float(kp.x), float(kp.y),
+                                    float(getattr(kp, 'score', 0.8))))
                 else:
-                    keypoints.append(Keypoint(0, 0, 0))
+                    raw_kps.append(None)
             else:
+                raw_kps.append(None)
+
+        # Detect normalised coordinates: all non-None x,y in [0, 1]
+        non_none = [(x, y) for (x, y, _) in raw_kps if _ is not None]
+        if not non_none:
+            non_none = [(x, y) for item in raw_kps if item is not None for x, y in [(item[0], item[1])]]
+
+        needs_scale = False
+        if non_none:
+            max_x = max(x for x, _ in non_none)
+            max_y = max(y for _, y in non_none)
+            if max_x <= 1.0 and max_y <= 1.0:
+                needs_scale = True
+                logger.info(
+                    "Keypoints appear normalised (max_x=%.3f, max_y=%.3f), "
+                    "scaling to %dx%d", max_x, max_y, w, h,
+                )
+
+        keypoints: List[Keypoint] = []
+        for item in raw_kps:
+            if item is None:
                 keypoints.append(Keypoint(0, 0, 0))
+            else:
+                x, y, score = item
+                if needs_scale:
+                    x *= w
+                    y *= h
+                # If score is the default 1.0 placeholder, use 0.8 instead
+                if score == 1.0 and needs_scale:
+                    score = 0.8
+                keypoints.append(Keypoint(x, y, score))
 
         return self._finalize_pose(keypoints, shape)
 
@@ -483,6 +520,20 @@ class PoseEstimator:
             if ankles:
                 avg_ankle_y = sum(a.y for a in ankles) / len(ankles)
                 height_px = abs(avg_ankle_y - nose.y)
+
+        # Fallback: if height is implausibly small, estimate from visible
+        # keypoints bounding box or image dimensions.
+        if height_px < 10:
+            vis = [kp for kp in keypoints if kp.is_visible]
+            if len(vis) >= 2:
+                ys = [kp.y for kp in vis]
+                height_px = max(ys) - min(ys)
+            if height_px < 10:
+                height_px = h * 0.6   # assume subject is ~60% of image
+                logger.warning(
+                    "Subject height too small (%.0fpx), defaulting to %.0fpx",
+                    height_px, h * 0.6,
+                )
 
         # Hip centre
         r_hip = keypoints[Joint.R_HIP]

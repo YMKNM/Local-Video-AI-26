@@ -215,7 +215,14 @@ class PoseConditionedPipeline:
         negative_prompt: str,
         config: GenerationConfig,
     ) -> GenerationResult:
-        """Full quality: AnimateDiff with ControlNet pose conditioning."""
+        """Full quality: AnimateDiff with ControlNet pose conditioning.
+
+        The source image is encoded to a VAE latent and tiled across all
+        frames so that the denoising process starts from the original
+        content instead of pure noise.  This preserves the identity,
+        colours and composition of the input while allowing the motion
+        adapter + ControlNet to introduce movement.
+        """
         import torch
         from PIL import Image as PILImage
 
@@ -279,9 +286,54 @@ class PoseConditionedPipeline:
             for pm in pose_maps[:config.num_frames]
         ]
 
-        # Generate
-        generator = torch.Generator(device="cpu").manual_seed(config.seed)
+        # ── Encode source image → initial latents ─────────────
+        # This makes the generator start from the source's content
+        # instead of pure noise, preserving identity and colours.
+        source_pil = PILImage.fromarray(source_image).resize(
+            (config.width, config.height)
+        )
+        source_tensor = (
+            torch.from_numpy(np.array(source_pil))
+            .permute(2, 0, 1)               # (3, H, W)
+            .unsqueeze(0)                    # (1, 3, H, W)
+            .float() / 127.5 - 1.0          # normalise to [-1, 1]
+        ).to(dtype=torch.float16)
 
+        vae_device = next(pipe.vae.parameters()).device
+        with torch.no_grad():
+            source_latent = pipe.vae.encode(
+                source_tensor.to(vae_device)
+            ).latent_dist.sample()
+            scaling = getattr(pipe.vae.config, "scaling_factor", 0.18215)
+            source_latent = source_latent * scaling
+
+        # Tile across frames: (B, C, F, H', W')
+        latents = source_latent.unsqueeze(2).repeat(
+            1, 1, config.num_frames, 1, 1
+        )
+
+        # Add noise at the scheduler's first timestep so the denoiser
+        # sees the correct noise level while the source structure is
+        # embedded in the initial state.
+        generator = torch.Generator(device="cpu").manual_seed(config.seed)
+        noise = torch.randn(
+            latents.shape, generator=generator, dtype=latents.dtype
+        )
+        pipe.scheduler.set_timesteps(config.num_inference_steps)
+        first_timestep = pipe.scheduler.timesteps[0:1]
+        latents = pipe.scheduler.add_noise(
+            latents.to(vae_device),
+            noise.to(vae_device),
+            first_timestep,
+        )
+
+        logger.info(
+            "Source image encoded to latent (shape=%s), "
+            "noise added at t=%d",
+            list(latents.shape), int(first_timestep[0]),
+        )
+
+        # Generate (pass source-derived latents)
         output = pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
@@ -293,9 +345,18 @@ class PoseConditionedPipeline:
             guidance_scale=config.guidance_scale,
             controlnet_conditioning_scale=config.controlnet_conditioning_scale,
             generator=generator,
+            latents=latents,
         )
 
         frames = self._extract_frames(output)
+
+        # ── Post-generation compositing ───────────────────────
+        # Replace background with original to fix colour drift and
+        # ensure only the subject area shows generated motion.
+        frames = self._composite_with_source(
+            frames, source_image, config,
+        )
+
         self._cleanup()
 
         return GenerationResult(
@@ -361,7 +422,37 @@ class PoseConditionedPipeline:
         self._pipe = pipe
         self._backend = "animatediff"
 
+        # ── Encode source image → initial latents ─────────────
+        source_pil = PILImage.fromarray(source_image).resize(
+            (config.width, config.height)
+        )
+        source_tensor = (
+            torch.from_numpy(np.array(source_pil))
+            .permute(2, 0, 1).unsqueeze(0)
+            .float() / 127.5 - 1.0
+        ).to(dtype=torch.float16)
+
+        vae_device = next(pipe.vae.parameters()).device
+        with torch.no_grad():
+            source_latent = pipe.vae.encode(
+                source_tensor.to(vae_device)
+            ).latent_dist.sample()
+            scaling = getattr(pipe.vae.config, "scaling_factor", 0.18215)
+            source_latent = source_latent * scaling
+
+        latents = source_latent.unsqueeze(2).repeat(
+            1, 1, config.num_frames, 1, 1
+        )
+
         generator = torch.Generator(device="cpu").manual_seed(config.seed)
+        noise = torch.randn(
+            latents.shape, generator=generator, dtype=latents.dtype
+        )
+        pipe.scheduler.set_timesteps(config.num_inference_steps)
+        first_timestep = pipe.scheduler.timesteps[0:1]
+        latents = pipe.scheduler.add_noise(
+            latents.to(vae_device), noise.to(vae_device), first_timestep,
+        )
 
         output = pipe(
             prompt=prompt,
@@ -372,9 +463,11 @@ class PoseConditionedPipeline:
             num_inference_steps=config.num_inference_steps,
             guidance_scale=config.guidance_scale,
             generator=generator,
+            latents=latents,
         )
 
         frames = self._extract_frames(output)
+        frames = self._composite_with_source(frames, source_image, config)
         self._cleanup()
 
         return GenerationResult(
@@ -498,6 +591,58 @@ class PoseConditionedPipeline:
                 frames.append(np.array(img))
 
         return frames
+
+    @staticmethod
+    def _composite_with_source(
+        frames: List[np.ndarray],
+        source_image: np.ndarray,
+        config: "GenerationConfig",
+        subject_blend: float = 0.7,
+    ) -> List[np.ndarray]:
+        """Composite generated frames with the source image.
+
+        - Background pixels are replaced 100% from the source (no drift).
+        - Subject pixels are blended ``subject_blend`` generated +
+          ``1 - subject_blend`` source to preserve identity/colour.
+        - A simple saliency mask is used when no external mask is supplied.
+        """
+        try:
+            import cv2
+        except ImportError:
+            logger.warning("cv2 not available, skipping compositing")
+            return frames
+
+        h_tgt, w_tgt = config.height, config.width
+        src_resized = cv2.resize(
+            source_image, (w_tgt, h_tgt), interpolation=cv2.INTER_LANCZOS4
+        )
+        # Convert BGR if needed (source is RGB)
+        # Create a rough subject mask via colour-difference saliency
+        gray_src = cv2.cvtColor(src_resized, cv2.COLOR_RGB2GRAY).astype(np.float32)
+
+        composited: List[np.ndarray] = []
+        for frame in frames:
+            if frame.shape[:2] != (h_tgt, w_tgt):
+                frame = cv2.resize(frame, (w_tgt, h_tgt))
+            gray_gen = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY).astype(np.float32)
+            # Difference mask: where generated differs from source = motion area
+            diff = np.abs(gray_gen - gray_src)
+            diff = cv2.GaussianBlur(diff, (15, 15), 0)
+            diff = diff / max(diff.max(), 1.0)  # normalise to [0, 1]
+            # Threshold to get motion mask
+            motion_mask = np.clip((diff - 0.15) / 0.35, 0, 1).astype(np.float32)
+            motion_mask = cv2.GaussianBlur(motion_mask, (21, 21), 0)
+            # 3-channel mask
+            mask3 = motion_mask[:, :, None]
+            # Blend: motion areas keep generated, static areas keep source
+            blended = (
+                frame.astype(np.float32) * mask3 * subject_blend
+                + src_resized.astype(np.float32) * (1.0 - mask3 * subject_blend)
+            )
+            composited.append(np.clip(blended, 0, 255).astype(np.uint8))
+
+        logger.info("Composited %d frames with source image", len(composited))
+        return composited
 
     def _cleanup(self):
         """Release GPU memory."""
