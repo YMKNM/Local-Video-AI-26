@@ -53,6 +53,8 @@ class DiffusersPipeline:
         self.progress_callback = progress_callback
 
         self._pipe = None
+        self._using_cpu_offload = False
+        self._step_times: list = []
         self._spec: Optional[ModelSpec] = get_model(model_name)
         if self._spec is None:
             raise ValueError(
@@ -127,6 +129,7 @@ class DiffusersPipeline:
         # For GPUs with <= 20GB VRAM, use CPU offload
         if vram_gb <= 20 or spec.needs_cpu_offload:
             logger.info("Using CPU offload strategy (VRAM <= 20GB)")
+            self._using_cpu_offload = True
             self._report(1, 4, "Loading to CPU first...")
             self._pipe = PipeClass.from_pretrained(
                 source,
@@ -135,6 +138,7 @@ class DiffusersPipeline:
             self._report(2, 4, "Enabling model CPU offload...")
             self._pipe.enable_model_cpu_offload()
         else:
+            self._using_cpu_offload = False
             self._pipe = PipeClass.from_pretrained(
                 source,
                 torch_dtype=spec.dtype,
@@ -156,14 +160,16 @@ class DiffusersPipeline:
             except Exception as e:
                 logger.warning(f"Could not set scheduler: {e} — using default")
 
-        try:
-            self._pipe.enable_vae_slicing()
-        except Exception:
-            pass
-        try:
-            self._pipe.enable_vae_tiling()
-        except Exception:
-            pass
+        if hasattr(self._pipe, 'enable_vae_slicing'):
+            try:
+                self._pipe.enable_vae_slicing()
+            except Exception:
+                pass
+        if hasattr(self._pipe, 'enable_vae_tiling'):
+            try:
+                self._pipe.enable_vae_tiling()
+            except Exception:
+                pass
 
         self._report(4, 4, "Pipeline ready")
         logger.info(f"Diffusers pipeline loaded: {spec.display_name} on {self.device}")
@@ -246,13 +252,35 @@ class DiffusersPipeline:
         if seed is not None and seed > 0:
             generator = torch.Generator(device="cpu").manual_seed(seed)
 
-        # Step callback for progress
+        # Step callback for progress with ETA tracking
         total_steps = num_inference_steps
-        def step_callback(pipe, step, timestep, callback_kwargs):
-            self._report(
-                step + 1, total_steps,
-                f"Denoising step {step + 1}/{total_steps}"
+        self._step_times = []
+        step_start = [time.time()]  # mutable ref for closure
+
+        if self._using_cpu_offload:
+            logger.warning(
+                f"CPU offload active — each denoising step may take 1-3 minutes. "
+                f"Total estimated time: {num_inference_steps * 2:.0f}-{num_inference_steps * 3:.0f} min. "
+                f"Reduce steps or use a smaller model for faster results."
             )
+            self._report(0, total_steps, f"Starting denoising (CPU offload, step 1 may take a few minutes)...")
+
+        def step_callback(pipe, step, timestep, callback_kwargs):
+            now = time.time()
+            step_elapsed = now - step_start[0]
+            self._step_times.append(step_elapsed)
+            step_start[0] = now
+
+            avg_step = sum(self._step_times) / len(self._step_times)
+            remaining = (total_steps - step - 1) * avg_step
+            if remaining >= 60:
+                eta_str = f"~{remaining / 60:.0f} min left"
+            else:
+                eta_str = f"~{remaining:.0f}s left"
+
+            msg = f"Step {step + 1}/{total_steps} ({step_elapsed:.0f}s/step, {eta_str})"
+            logger.info(msg)
+            self._report(step + 1, total_steps, msg)
             return callback_kwargs
 
         start = time.time()
@@ -271,7 +299,7 @@ class DiffusersPipeline:
             )
 
         elapsed = time.time() - start
-        logger.info(f"Diffusion completed in {elapsed:.1f}s")
+        logger.info(f"Diffusion completed in {elapsed:.1f}s ({elapsed/60:.1f} min)")
 
         # ── extract frames from output ────────────────────────
         # output.frames is typically List[List[PIL.Image]]

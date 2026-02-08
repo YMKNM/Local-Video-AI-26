@@ -141,10 +141,10 @@ MODEL_PRESETS = _build_model_presets()
 
 # Quality / speed presets (model-independent step counts)
 QUALITY_PRESETS = {
-    "⚡ Draft (15 steps)": 15,
-    "⚖️ Balanced (25 steps)": 25,
-    "🎬 Quality (30 steps)": 30,
-    "💎 Maximum (50 steps)": 50,
+    "Draft (10 steps)": 10,
+    "Balanced (20 steps)": 20,
+    "Quality (30 steps)": 30,
+    "Maximum (50 steps)": 50,
 }
 
 # ─── CSS ─────────────────────────────────────────────────────────────────────
@@ -712,7 +712,7 @@ class WebUI:
 
             self._progress_total_steps = steps
             self._progress_step = 0
-            self._current_status = f"Denoising 0/{steps}…"
+            self._current_status = f"Starting denoising (0/{steps}) - first step may take 1-3 min with CPU offload..."
 
             # ── Run generation ──────────────────────────────
             result = self._generator.generate(
@@ -947,7 +947,7 @@ class WebUI:
                             with gr.Row(elem_classes=["settings-row"]):
                                 quality_preset = gr.Dropdown(
                                     choices=list(QUALITY_PRESETS.keys()),
-                                    value="🎬 Quality (30 steps)",
+                                    value="Balanced (20 steps)",
                                     label="Quality",
                                 )
                                 guidance = gr.Slider(
