@@ -50,6 +50,13 @@ try:
 except ImportError:
     AGGRESSIVE_TAB_AVAILABLE = False
 
+# Import Image-to-Video Animation tab
+try:
+    from .image_motion_tab import create_image_motion_tab
+    IMAGE_MOTION_TAB_AVAILABLE = True
+except ImportError:
+    IMAGE_MOTION_TAB_AVAILABLE = False
+
 # Import model registry
 try:
     from ..runtime.model_registry import (
@@ -1154,6 +1161,11 @@ class WebUI:
                 if AGGRESSIVE_TAB_AVAILABLE:
                     with gr.TabItem("🔥 Aggressive", id="aggressive"):
                         create_aggressive_generator_tab()
+
+                # ━━━━━━━━━━━━━━  IMAGE-TO-VIDEO TAB (if available)  ━━
+                if IMAGE_MOTION_TAB_AVAILABLE:
+                    with gr.TabItem("Image to Video", id="image_motion"):
+                        create_image_motion_tab()
 
             # ── Footer ──────────────────────────────────────
             gr.HTML("""
