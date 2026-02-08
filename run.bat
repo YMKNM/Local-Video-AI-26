@@ -89,12 +89,8 @@ shift
 goto parse_args
 :end_parse
 
-REM Check CUDA availability
-echo [INFO] Checking GPU availability...
-python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}')" 2>nul
-if %ERRORLEVEL% NEQ 0 (
-    echo [WARN] Could not check CUDA. Make sure PyTorch is installed.
-)
+REM GPU will be detected at runtime by the app itself
+echo [INFO] GPU detection deferred to app startup
 echo.
 
 REM Start services based on mode
