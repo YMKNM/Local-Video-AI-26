@@ -117,6 +117,21 @@ class PipelineResult:
 
 # ── Pipeline ──────────────────────────────────────────────────────────
 
+# Stage index -> (start_fraction, end_fraction) of overall progress.
+# Generation (stage 5) dominates wall-clock time.
+_STAGE_RANGES: List[Tuple[float, float]] = [
+    (0.00, 0.02),   # 0: Load image
+    (0.02, 0.14),   # 1: SAM segmentation (may retry)
+    (0.14, 0.17),   # 2: Parse action
+    (0.17, 0.24),   # 3: Detect pose
+    (0.24, 0.29),   # 4: Synthesize motion
+    (0.29, 0.85),   # 5: Generate video (heavy)
+    (0.85, 0.92),   # 6: Temporal consistency
+    (0.92, 0.96),   # 7: Stabilise
+    (0.96, 1.00),   # 8: Assemble
+]
+
+
 class ObjectVideoPipeline:
     """
     End-to-end image-to-video animation with pose-conditioned generation.
@@ -126,10 +141,13 @@ class ObjectVideoPipeline:
       -> TemporalConsistency -> VideoAssembly
     """
 
+    # Make the class-level ranges accessible on the instance
+    _STAGE_RANGES = _STAGE_RANGES
+
     def __init__(
         self,
         config: Optional[PipelineConfig] = None,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
     ):
         self.config = config or PipelineConfig()
         self.progress_callback = progress_callback
@@ -177,13 +195,13 @@ class ObjectVideoPipeline:
 
         try:
             # ── 0. Load image ────────────────────────────────
-            self._report(0, 8, "Loading image...")
+            self._report(0, "Loading image...")
             image_rgb = self._load_image(image_path)
             h, w = image_rgb.shape[:2]
             logger.info("[%s] Image loaded: %dx%d", job_id, w, h)
 
             # ── 1. Segment with SAM 2 + retry ───────────────
-            self._report(1, 8, "Segmenting subject (SAM 2 with retry)...")
+            self._report(1, "Segmenting subject (SAM 2 with retry)...")
             seg = self._segment_with_retry(
                 image_rgb, self._extract_subject_hint(action_prompt)
             )
@@ -196,7 +214,7 @@ class ObjectVideoPipeline:
             )
 
             # ── 2. Parse action ──────────────────────────────
-            self._report(2, 8, "Parsing action prompt...")
+            self._report(2, "Parsing action prompt...")
             intent = self._get_parser().parse(action_prompt)
             intent.intensity *= cfg.motion_intensity
             warnings.extend(intent.warnings)
@@ -207,7 +225,7 @@ class ObjectVideoPipeline:
             )
 
             # ── 3. Detect pose (DWPose/OpenPose) ────────────
-            self._report(3, 8, "Extracting skeletal pose...")
+            self._report(3, "Extracting skeletal pose...")
             pose_result = self._detect_pose(image_rgb, seg)
             if pose_result.warnings:
                 warnings.extend(pose_result.warnings)
@@ -219,7 +237,7 @@ class ObjectVideoPipeline:
             )
 
             # ── 4. Synthesize motion (procedural poses) ─────
-            self._report(4, 8, "Synthesizing motion sequence...")
+            self._report(4, "Synthesizing motion sequence...")
             pose_sequence = self._synthesize_motion(
                 pose_result, intent, cfg
             )
@@ -239,7 +257,7 @@ class ObjectVideoPipeline:
             warnings.extend(plan.warnings)
 
             # ── 6. Generate video (pose-conditioned) ─────────
-            self._report(5, 8, "Generating video (pose-conditioned)...")
+            self._report(5, "Generating video (pose-conditioned)...")
             frame_paths, gen_warnings = self._generate_pose_conditioned(
                 image_rgb=image_rgb,
                 pose_sequence=pose_sequence,
@@ -251,19 +269,19 @@ class ObjectVideoPipeline:
 
             # ── 7. Temporal consistency + stabilisation ──────
             if len(frame_paths) > 1:
-                self._report(6, 8, "Applying temporal consistency...")
+                self._report(6, "Applying temporal consistency...")
                 frame_paths = self._apply_temporal_consistency(
                     frame_paths, seg, cfg
                 )
 
                 if cfg.stabilize:
-                    self._report(7, 8, "Stabilising output...")
+                    self._report(7, "Stabilising output...")
                     frame_paths = self._get_stabilizer().stabilize_sequence(
                         frame_paths
                     )
 
             # ── 8. Assemble video ────────────────────────────
-            self._report(8, 8, "Assembling final video...")
+            self._report(8, "Assembling final video...")
             out_dir = Path(cfg.output_dir) / job_id
             out_dir.mkdir(parents=True, exist_ok=True)
             video_path = self._assemble_video(frame_paths, out_dir, cfg.fps)
@@ -612,9 +630,15 @@ class ObjectVideoPipeline:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         if self._diffusion_pipeline is None or self._diffusion_pipeline.model_name != cfg.model_name:
+            # Create a sub-progress callback that maps diffusers steps into
+            # the generation stage (stage 5) of the overall pipeline progress.
+            def _gen_sub_cb(step: int, total: int, msg: str):
+                sub_frac = step / max(total, 1)
+                self._report(5, msg, sub_fraction=sub_frac)
+
             self._diffusion_pipeline = DiffusersPipeline(
                 model_name=cfg.model_name,
-                progress_callback=self.progress_callback,
+                progress_callback=_gen_sub_cb,
             )
 
         frame_paths = self._diffusion_pipeline.generate_frames(
@@ -770,7 +794,25 @@ class ObjectVideoPipeline:
 
     # ── Progress reporting ────────────────────────────────────
 
-    def _report(self, current: int, total: int, msg: str):
+    def _report(self, stage: int, msg: str, sub_fraction: float = 0.0):
+        """
+        Report progress as an overall fraction (0.0 -- 1.0).
+
+        Parameters
+        ----------
+        stage : int
+            Pipeline stage index (0-8).
+        msg : str
+            Human-readable description of the current work.
+        sub_fraction : float
+            Progress *within* the current stage (0.0 -- 1.0).
+            Used for sub-step reporting inside heavy stages.
+        """
+        if stage < len(self._STAGE_RANGES):
+            start, end = self._STAGE_RANGES[stage]
+            fraction = start + (end - start) * min(sub_fraction, 1.0)
+        else:
+            fraction = 1.0
         if self.progress_callback:
-            self.progress_callback(current, total, msg)
-        logger.info("Pipeline progress: %d/%d -- %s", current, total, msg)
+            self.progress_callback(fraction, msg)
+        logger.info("Pipeline [%.0f%%] %s", fraction * 100, msg)

@@ -208,6 +208,9 @@ class SAM2Segmenter:
         if best_mask is None:
             raise RuntimeError("All SAM 2 strategies failed")
 
+        # Clamp confidence to [0, 1] — SAM can return values slightly > 1.0
+        best_conf = max(0.0, min(best_conf, 1.0))
+
         # Build background mask
         bg_mask = 1.0 - best_mask
 

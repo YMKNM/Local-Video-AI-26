@@ -316,6 +316,10 @@ class ObjectSegmenter:
     ) -> SegmentationResult:
         """Build a SegmentationResult, computing bbox and quality."""
         h, w = image.shape[:2]
+
+        # Clamp confidence to [0, 1] — SAM can return values slightly > 1.0
+        confidence = max(0.0, min(float(confidence), 1.0))
+
         binary = (mask > 0.5).astype(np.uint8)
         area = float(binary.sum())
         total = float(h * w)

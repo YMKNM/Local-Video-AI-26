@@ -72,6 +72,7 @@ def _run_image_to_video(
     model_label: str,
     seed: int,
     stabilize: bool,
+    progress=gr.Progress(track_tqdm=True),
 ) -> tuple:
     """
     Called by the Generate button.
@@ -117,9 +118,20 @@ def _run_image_to_video(
         model_name=model_name,
     )
 
+    # Build progress callback for Gradio's Progress bar
+    def _progress_cb(fraction: float, msg: str):
+        try:
+            progress(fraction, desc=msg)
+        except Exception:
+            pass  # Gradio progress may fail silently
+
     try:
         if _pipeline is None:
-            _pipeline = ObjectVideoPipeline(config=cfg)
+            _pipeline = ObjectVideoPipeline(
+                config=cfg, progress_callback=_progress_cb,
+            )
+        else:
+            _pipeline.progress_callback = _progress_cb
         result = _pipeline.run(
             image_path=str(img_path),
             action_prompt=action_prompt,

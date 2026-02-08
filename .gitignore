@@ -20,6 +20,8 @@ models/ltx-video-2b/
 models/text_encoder/
 models/vae/
 models/video_diffusion/
+models/*.pth
+models_cache/
 
 # ── Outputs & caches ─────────────────────────────────────────────
 outputs/
