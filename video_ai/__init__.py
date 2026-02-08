@@ -3,10 +3,19 @@ Video AI Main Package
 Local AI video generation system for AMD GPUs on Windows
 """
 
-from .agent import GenerationPlanner, PromptEngine, ResourceMonitor, RetryManager
-
 __version__ = "0.1.0"
 __author__ = "Video AI Project"
+
+
+# ── Lazy imports ---------------------------------------------------------
+# Heavy modules (torch, gradio, fastapi, diffusers) are NOT imported at
+# package level.  They are loaded on first use to keep startup fast and
+# avoid import-chain crashes.
+
+def _import_agent():
+    from .agent import GenerationPlanner, PromptEngine, ResourceMonitor, RetryManager
+    return GenerationPlanner, PromptEngine, ResourceMonitor, RetryManager
+
 
 # UI launcher function
 def launch_ui(**kwargs):
@@ -45,6 +54,7 @@ class VideoAI:
     def planner(self):
         """Lazy-load the generation planner"""
         if self._planner is None:
+            from .agent import GenerationPlanner
             self._planner = GenerationPlanner(
                 config_dir=self._config_dir,
                 output_dir=self._output_dir
@@ -109,23 +119,34 @@ __all__ = [
     'VideoAI',
     'generate',
     'launch_ui',
-    'GenerationPlanner',
-    'PromptEngine',
-    'ResourceMonitor',
-    'RetryManager',
 ]
 
-# Also expose the advanced API (server module only exports app/run_server;
-# VideoGenerator etc. live in the root-level api.py entry point)
-try:
-    from .api import app as _api_app, run_server
-    __all__.extend(['run_server'])
-except ImportError:
-    pass  # API module not available (fastapi not installed)
 
-# Expose UI module
-try:
-    from .ui import WebUI, UILogHandler
-    __all__.extend(['WebUI', 'UILogHandler'])
-except ImportError:
-    pass  # UI module not available
+def __getattr__(name):
+    """Lazy attribute access for heavy sub-module symbols."""
+    # Agent classes
+    _agent_names = {
+        'GenerationPlanner', 'PromptEngine', 'ResourceMonitor', 'RetryManager',
+    }
+    if name in _agent_names:
+        from . import agent as _agent
+        return getattr(_agent, name)
+
+    # API server
+    if name == 'run_server':
+        try:
+            from .api import run_server
+            return run_server
+        except ImportError:
+            raise AttributeError(name)
+
+    # UI classes
+    _ui_names = {'WebUI', 'UILogHandler'}
+    if name in _ui_names:
+        try:
+            from . import ui as _ui
+            return getattr(_ui, name)
+        except ImportError:
+            raise AttributeError(name)
+
+    raise AttributeError(f"module 'video_ai' has no attribute {name!r}")

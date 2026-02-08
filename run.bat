@@ -51,6 +51,7 @@ if not exist "cache" mkdir cache
 
 REM Set environment variables
 set PYTHONPATH=%CD%
+set PYTHONIOENCODING=utf-8
 set CUDA_VISIBLE_DEVICES=0
 set PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 set HF_HOME=%CD%\cache\huggingface

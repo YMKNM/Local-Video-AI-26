@@ -76,16 +76,13 @@ Examples:
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # Print banner
-    print("""
-╔═══════════════════════════════════════════════════════════╗
-║                                                           ║
-║   🎬 Video AI - Local AI Video Generation                 ║
-║                                                           ║
-║   Web UI for AMD GPU Acceleration                         ║
-║                                                           ║
-╚═══════════════════════════════════════════════════════════╝
-    """)
+    # Print banner (ASCII-only to avoid cp1252 encoding errors on Windows cmd)
+    print("")
+    print("  ====================================================")
+    print("    Video AI - Local AI Video Generation")
+    print("    Web UI for GPU Acceleration")
+    print("  ====================================================")
+    print("")
     
     print(f"Starting web UI on port {args.port}...")
     print(f"Output directory: {args.output_dir}")
