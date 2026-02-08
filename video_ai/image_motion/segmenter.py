@@ -350,7 +350,8 @@ class ObjectSegmenter:
             quality = SegmentationQuality.LOW
             warnings.append(
                 f"Low segmentation confidence ({confidence:.0%}). "
-                "Motion intensity will be reduced."
+                "Full motion intensity maintained -- consider re-segmenting "
+                "with SAM2Segmenter for higher accuracy."
             )
 
         bg_mask = 1.0 - mask

@@ -281,12 +281,15 @@ class MotionPlanner:
         # Limb cycle frequency
         limb_freq = _LIMB_FREQ.get(intent.action, 0.0)
 
-        # Reduce intensity when segmentation quality is poor
+        # NEVER reduce motion intensity based on segmentation quality.
+        # If segmentation is poor, the correct action is to re-segment
+        # (retry with SAM2Segmenter), not to degrade the animation.
         seg_mult = 1.0
         if not seg.is_usable:
-            seg_mult = 0.5
             warnings.append(
-                "Low segmentation quality -- motion intensity halved"
+                "Low segmentation quality detected. Full motion intensity "
+                "maintained. For better results, use SAM2Segmenter with "
+                "retry logic."
             )
 
         keyframes: List[MotionKeyframe] = []

@@ -1,18 +1,24 @@
 """
-Object-Aware Video Pipeline -- Stage 4
+Object-Aware Video Pipeline -- Architecture v2
 
-Orchestrates the full image-to-video animation workflow:
+Orchestrates the full image-to-video animation workflow using
+a pose-conditioned generation pipeline:
 
-    1. **Segment** the subject out of the input image.
+    1. **Segment** the subject using SAM 2 with retry logic
+       (falls back to SAM 1 / GrabCut, NEVER reduces motion).
     2. **Parse** the action prompt into a structured ``ActionIntent``.
-    3. **Plan** frame-by-frame motion from intent + mask.
-    4. **Generate** a video using the diffusion pipeline with
-       motion-conditioned prompt enrichment.
-    5. **Stabilise** the output temporally (see ``temporal_stabilizer``).
+    3. **Detect pose** via DWPose/OpenPose skeletal extraction.
+    4. **Synthesize motion** -- procedural biomechanical pose sequence.
+    5. **Generate video** via AnimateDiff + ControlNet OpenPose
+       (conditioned on pose maps, not just text).
+    6. **Temporal consistency** -- latent reuse + optical flow + anti-ghosting.
+    7. **Assemble** frames into output video.
 
-This module never modifies existing code -- it imports existing
-infrastructure (``DiffusersPipeline``, ``VideoAssembler``, etc.) and
-composes them with the new image-motion stages.
+Graceful degradation:
+  - If segmentation confidence < 90%: RETRY (not reduce motion)
+  - If VRAM insufficient: reduce resolution, NEVER reduce motion
+  - If ControlNet unavailable: fall back to AnimateDiff / img2img
+  - If duration too long: reduce frame count, NEVER reduce coherence
 
 Usage::
 
@@ -113,7 +119,11 @@ class PipelineResult:
 
 class ObjectVideoPipeline:
     """
-    End-to-end image-to-video animation with object-level awareness.
+    End-to-end image-to-video animation with pose-conditioned generation.
+
+    Pipeline stages:
+      SAM 2 (retry) -> DWPose -> MotionSynthesizer -> AnimateDiff+ControlNet
+      -> TemporalConsistency -> VideoAssembly
     """
 
     def __init__(
@@ -125,11 +135,16 @@ class ObjectVideoPipeline:
         self.progress_callback = progress_callback
 
         # Sub-modules (lazy-initialised)
-        self._segmenter: Optional[ObjectSegmenter] = None
+        self._sam2_segmenter = None
+        self._legacy_segmenter: Optional[ObjectSegmenter] = None
         self._parser: Optional[ActionParser] = None
         self._planner: Optional[MotionPlanner] = None
         self._stabilizer: Optional[TemporalStabilizer] = None
-        self._diffusion_pipeline = None  # DiffusersPipeline (lazy)
+        self._pose_estimator = None
+        self._motion_synthesizer = None
+        self._pose_pipeline = None
+        self._temporal_consistency = None
+        self._diffusion_pipeline = None  # legacy fallback
 
     # ── public entry ──────────────────────────────────────────
 
@@ -140,7 +155,7 @@ class ObjectVideoPipeline:
         config: Optional[PipelineConfig] = None,
     ) -> PipelineResult:
         """
-        Run the full image-to-video pipeline.
+        Run the full pose-conditioned image-to-video pipeline.
 
         Parameters
         ----------
@@ -162,31 +177,58 @@ class ObjectVideoPipeline:
 
         try:
             # ── 0. Load image ────────────────────────────────
-            self._report(0, 6, "Loading image...")
+            self._report(0, 8, "Loading image...")
             image_rgb = self._load_image(image_path)
             h, w = image_rgb.shape[:2]
             logger.info("[%s] Image loaded: %dx%d", job_id, w, h)
 
-            # ── 1. Segment ───────────────────────────────────
-            self._report(1, 6, "Segmenting subject...")
-            seg = self._get_segmenter().segment(
-                image_rgb, subject_hint=self._extract_subject_hint(action_prompt)
+            # ── 1. Segment with SAM 2 + retry ───────────────
+            self._report(1, 8, "Segmenting subject (SAM 2 with retry)...")
+            seg = self._segment_with_retry(
+                image_rgb, self._extract_subject_hint(action_prompt)
             )
             warnings.extend(seg.warnings)
-            logger.info("[%s] Segmentation: %s (%.0f%% conf, quality=%s)",
-                        job_id, seg.label, seg.confidence * 100, seg.quality.value)
+            logger.info(
+                "[%s] Segmentation: %s (%.0f%% conf, quality=%s, retries=%d)",
+                job_id, seg.label, seg.confidence * 100,
+                seg.quality.value,
+                getattr(seg, '_retries_used', 0),
+            )
 
             # ── 2. Parse action ──────────────────────────────
-            self._report(2, 6, "Parsing action prompt...")
+            self._report(2, 8, "Parsing action prompt...")
             intent = self._get_parser().parse(action_prompt)
             intent.intensity *= cfg.motion_intensity
             warnings.extend(intent.warnings)
-            logger.info("[%s] Intent: %s %s %s (conf=%.2f)",
-                        job_id, intent.action.value, intent.subject,
-                        intent.direction.value, intent.confidence)
+            logger.info(
+                "[%s] Intent: %s %s %s (conf=%.2f)",
+                job_id, intent.action.value, intent.subject,
+                intent.direction.value, intent.confidence,
+            )
 
-            # ── 3. Plan motion ───────────────────────────────
-            self._report(3, 6, "Planning motion...")
+            # ── 3. Detect pose (DWPose/OpenPose) ────────────
+            self._report(3, 8, "Extracting skeletal pose...")
+            pose_result = self._detect_pose(image_rgb, seg)
+            if pose_result.warnings:
+                warnings.extend(pose_result.warnings)
+            logger.info(
+                "[%s] Pose: %d visible joints, conf=%.2f, height=%.0fpx",
+                job_id, pose_result.num_visible,
+                pose_result.overall_confidence,
+                pose_result.subject_height_px,
+            )
+
+            # ── 4. Synthesize motion (procedural poses) ─────
+            self._report(4, 8, "Synthesizing motion sequence...")
+            pose_sequence = self._synthesize_motion(
+                pose_result, intent, cfg
+            )
+            logger.info(
+                "[%s] Motion synthesized: %d frames",
+                job_id, len(pose_sequence),
+            )
+
+            # ── 5. Plan motion (legacy, for metadata) ───────
             plan = self._get_planner().plan(
                 intent=intent,
                 seg=seg,
@@ -196,32 +238,41 @@ class ObjectVideoPipeline:
             )
             warnings.extend(plan.warnings)
 
-            # ── 4. Generate video frames ─────────────────────
-            self._report(4, 6, "Generating video (this may take a while)...")
-            enriched_prompt = self._build_enriched_prompt(intent, plan, cfg)
-            frame_paths = self._generate_with_diffusion(
+            # ── 6. Generate video (pose-conditioned) ─────────
+            self._report(5, 8, "Generating video (pose-conditioned)...")
+            frame_paths, gen_warnings = self._generate_pose_conditioned(
                 image_rgb=image_rgb,
-                prompt=enriched_prompt,
-                cfg=cfg,
+                pose_sequence=pose_sequence,
+                intent=intent,
                 seg=seg,
+                cfg=cfg,
             )
+            warnings.extend(gen_warnings)
 
-            # ── 5. Temporal stabilisation ────────────────────
-            if cfg.stabilize and len(frame_paths) > 1:
-                self._report(5, 6, "Stabilising output...")
-                frame_paths = self._get_stabilizer().stabilize_sequence(
-                    frame_paths
+            # ── 7. Temporal consistency + stabilisation ──────
+            if len(frame_paths) > 1:
+                self._report(6, 8, "Applying temporal consistency...")
+                frame_paths = self._apply_temporal_consistency(
+                    frame_paths, seg, cfg
                 )
 
-            # ── 6. Assemble video ────────────────────────────
-            self._report(6, 6, "Assembling final video...")
+                if cfg.stabilize:
+                    self._report(7, 8, "Stabilising output...")
+                    frame_paths = self._get_stabilizer().stabilize_sequence(
+                        frame_paths
+                    )
+
+            # ── 8. Assemble video ────────────────────────────
+            self._report(8, 8, "Assembling final video...")
             out_dir = Path(cfg.output_dir) / job_id
             out_dir.mkdir(parents=True, exist_ok=True)
             video_path = self._assemble_video(frame_paths, out_dir, cfg.fps)
 
             elapsed = time.time() - start
-            logger.info("[%s] Pipeline complete in %.1fs -> %s",
-                        job_id, elapsed, video_path)
+            logger.info(
+                "[%s] Pipeline complete in %.1fs -> %s",
+                job_id, elapsed, video_path,
+            )
 
             return PipelineResult(
                 success=True,
@@ -236,8 +287,10 @@ class ObjectVideoPipeline:
 
         except Exception as e:
             elapsed = time.time() - start
-            logger.error("[%s] Pipeline failed after %.1fs: %s",
-                         job_id, elapsed, e, exc_info=True)
+            logger.error(
+                "[%s] Pipeline failed after %.1fs: %s",
+                job_id, elapsed, e, exc_info=True,
+            )
             return PipelineResult(
                 success=False,
                 elapsed_seconds=elapsed,
@@ -245,27 +298,248 @@ class ObjectVideoPipeline:
                 error=str(e),
             )
 
+    # ── Stage 1: Segmentation with retry ──────────────────────
+
+    def _segment_with_retry(
+        self, image: np.ndarray, subject_hint: str
+    ) -> SegmentationResult:
+        """
+        Segment using SAM 2 with retry, falling back to legacy segmenter.
+        NEVER reduces motion intensity on low confidence.
+        """
+        # Try SAM 2 segmenter first
+        try:
+            sam2 = self._get_sam2_segmenter()
+            multi_seg = sam2.segment(image, subject_hint=subject_hint)
+
+            # Convert MultiObjectSegmentation -> SegmentationResult
+            from .segmenter import SegmentationQuality
+            if multi_seg.is_high_confidence:
+                quality = SegmentationQuality.HIGH
+            elif multi_seg.is_usable:
+                quality = SegmentationQuality.MEDIUM
+            else:
+                quality = SegmentationQuality.LOW
+
+            seg = SegmentationResult(
+                mask=multi_seg.subject_mask,
+                bbox=multi_seg.subject_bbox,
+                label=multi_seg.subject_label,
+                confidence=multi_seg.subject_confidence,
+                quality=quality,
+                object_area_ratio=float(multi_seg.subject_mask.sum())
+                / max(multi_seg.subject_mask.size, 1),
+                background_mask=multi_seg.background_mask,
+                warnings=multi_seg.warnings,
+            )
+            # Attach retry metadata
+            seg._retries_used = multi_seg.retries_used  # type: ignore
+            return seg
+
+        except Exception as e:
+            logger.warning("SAM 2 segmenter failed (%s), using legacy", e)
+
+        # Legacy fallback (ObjectSegmenter)
+        seg = self._get_legacy_segmenter().segment(image, subject_hint)
+        seg._retries_used = 0  # type: ignore
+        return seg
+
+    # ── Stage 3: Pose detection ───────────────────────────────
+
+    def _detect_pose(
+        self, image: np.ndarray, seg: SegmentationResult
+    ):
+        """Extract skeletal pose using DWPose/OpenPose/MediaPipe/heuristic."""
+        estimator = self._get_pose_estimator()
+        return estimator.estimate(
+            image, mask=seg.mask, bbox=seg.bbox
+        )
+
+    # ── Stage 4: Motion synthesis ─────────────────────────────
+
+    def _synthesize_motion(self, pose_result, intent, cfg):
+        """Generate procedural pose sequence from initial pose + action."""
+        from .motion_synthesizer import MotionConfig
+        synth = self._get_motion_synthesizer()
+
+        motion_cfg = MotionConfig(
+            num_frames=cfg.num_frames,
+            fps=cfg.fps,
+            intensity=cfg.motion_intensity,
+            seed=cfg.seed or 42,
+        )
+
+        return synth.synthesize(
+            initial_pose=pose_result,
+            verb=intent.action.value,
+            speed=intent.speed.value,
+            direction=intent.direction.value,
+            config=motion_cfg,
+        )
+
+    # ── Stage 5: Pose-conditioned generation ──────────────────
+
+    def _generate_pose_conditioned(
+        self,
+        image_rgb: np.ndarray,
+        pose_sequence,
+        intent: ActionIntent,
+        seg: SegmentationResult,
+        cfg: PipelineConfig,
+    ) -> Tuple[List[str], List[str]]:
+        """
+        Generate frames using AnimateDiff + ControlNet OpenPose.
+        Falls back to legacy text-to-video if pose pipeline unavailable.
+        """
+        warnings: List[str] = []
+
+        # Render pose maps from the synthesized pose sequence
+        try:
+            estimator = self._get_pose_estimator()
+            pose_maps = [
+                estimator.render_pose_map(p, cfg.width, cfg.height)
+                for p in pose_sequence
+            ]
+        except Exception as e:
+            logger.warning("Pose map rendering failed: %s", e)
+            warnings.append(f"Pose map rendering failed: {e}")
+            pose_maps = None
+
+        # Try pose-conditioned pipeline
+        if pose_maps:
+            try:
+                from .pose_conditioned_pipeline import (
+                    GenerationConfig,
+                    PoseConditionedPipeline,
+                )
+                pipe = self._get_pose_pipeline()
+                gen_cfg = GenerationConfig(
+                    width=cfg.width,
+                    height=cfg.height,
+                    num_frames=cfg.num_frames,
+                    fps=cfg.fps,
+                    num_inference_steps=cfg.num_inference_steps,
+                    guidance_scale=cfg.guidance_scale,
+                    seed=cfg.seed or 42,
+                )
+
+                prompt = self._build_enriched_prompt(intent, None, cfg)
+                result = pipe.generate(
+                    source_image=image_rgb,
+                    pose_maps=pose_maps,
+                    prompt=prompt,
+                    negative_prompt=cfg.negative_prompt,
+                    config=gen_cfg,
+                    mask=seg.mask,
+                )
+
+                if result.success and result.frames:
+                    # Save frames to disk
+                    out_dir = Path(cfg.output_dir) / "frames"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    frame_paths = self._save_frames(result.frames, out_dir)
+                    warnings.extend(result.warnings)
+                    return frame_paths, warnings
+
+                warnings.extend(result.warnings)
+                logger.warning(
+                    "Pose pipeline returned no frames, falling back to legacy"
+                )
+
+            except Exception as e:
+                logger.warning("Pose-conditioned pipeline failed: %s", e)
+                warnings.append(
+                    f"Pose-conditioned pipeline unavailable ({e}), "
+                    "using legacy text-to-video"
+                )
+
+        # Legacy fallback: text-to-video with enriched prompt
+        logger.info("Using legacy text-to-video generation")
+        prompt = self._build_enriched_prompt(intent, None, cfg)
+        frame_paths = self._generate_with_diffusion(
+            image_rgb=image_rgb, prompt=prompt, cfg=cfg, seg=seg
+        )
+        warnings.append(
+            "Used text-to-video fallback. Install controlnet_aux and "
+            "AnimateDiff for pose-conditioned generation."
+        )
+        return frame_paths, warnings
+
+    # ── Stage 6: Temporal consistency ─────────────────────────
+
+    def _apply_temporal_consistency(
+        self,
+        frame_paths: List[str],
+        seg: SegmentationResult,
+        cfg: PipelineConfig,
+    ) -> List[str]:
+        """Apply post-generation temporal consistency pass."""
+        try:
+            from .temporal_consistency import (
+                ConsistencyConfig,
+                TemporalConsistencyPass,
+            )
+
+            # Load frames as arrays
+            frames = []
+            for fp in frame_paths:
+                img = Image.open(fp).convert("RGB")
+                frames.append(np.array(img))
+
+            if len(frames) < 2:
+                return frame_paths
+
+            tc = self._get_temporal_consistency()
+            tc_cfg = ConsistencyConfig(
+                enable_background_lock=True,
+                enable_flow_smoothing=True,
+                enable_anti_ghosting=True,
+                enable_temporal_denoise=True,
+            )
+
+            # Background from the original source (first frame as proxy)
+            background = frames[0].copy()
+
+            # Subject masks for background lock
+            masks = [seg.mask] * len(frames)
+
+            result = tc.apply(
+                frames=frames,
+                subject_masks=masks,
+                background=background,
+                config=tc_cfg,
+            )
+
+            if result.num_corrections > 0:
+                logger.info(
+                    "Temporal consistency: %d corrections, %d ghost fixes",
+                    result.num_corrections, result.ghost_frames_fixed,
+                )
+
+            # Save corrected frames back
+            out_dir = Path(frame_paths[0]).parent
+            return self._save_frames(result.frames, out_dir)
+
+        except Exception as e:
+            logger.warning("Temporal consistency pass failed: %s", e)
+            return frame_paths
+
     # ── Prompt enrichment ─────────────────────────────────────
 
     def _build_enriched_prompt(
         self,
         intent: ActionIntent,
-        plan: MotionPlan,
+        plan: Optional[MotionPlan],
         cfg: PipelineConfig,
     ) -> str:
         """
         Build a diffusion-model prompt enriched with motion cues.
-
-        Translates the structured ``ActionIntent`` back into a verbose,
-        natural-language description that steers the diffusion model
-        towards the desired motion.
         """
         parts: List[str] = []
 
         if cfg.prompt_prefix:
             parts.append(cfg.prompt_prefix)
 
-        # Subject + action
         subject = intent.subject or "the subject"
         verb_map = {
             "walk": "walking",
@@ -284,15 +558,13 @@ class ObjectVideoPipeline:
         action_ing = verb_map.get(intent.action.value, intent.action.value + "ing")
         parts.append(f"{subject} {action_ing}")
 
-        # Direction
-        if intent.direction.value not in ("in_place", "forward"):
+        if intent.direction.value not in ("in_place", "forward", "stationary"):
             parts.append(intent.direction.value.replace("_", " "))
 
-        # Speed
         speed_adj = {
             "very_slow": "very slowly",
             "slow": "slowly",
-            "normal": "",
+            "medium": "",
             "fast": "quickly",
             "very_fast": "very fast",
         }
@@ -300,10 +572,9 @@ class ObjectVideoPipeline:
         if spd:
             parts.append(spd)
 
-        # Quality cues
         parts.append(
             "smooth continuous motion, high quality, photorealistic, "
-            "natural movement, consistent lighting"
+            "natural movement, consistent lighting, temporal coherence"
         )
 
         if cfg.prompt_suffix:
@@ -313,7 +584,7 @@ class ObjectVideoPipeline:
         logger.info("Enriched prompt: %s", enriched)
         return enriched
 
-    # ── Diffusion generation ──────────────────────────────────
+    # ── Legacy diffusion generation (fallback) ────────────────
 
     def _generate_with_diffusion(
         self,
@@ -324,12 +595,9 @@ class ObjectVideoPipeline:
     ) -> List[str]:
         """
         Generate video frames using the existing DiffusersPipeline.
-
-        For models that support image-to-video (e.g. LTX-Video),
-        the input image is passed directly.  For text-only models,
-        we rely on the enriched prompt to encode motion cues.
+        This is the legacy fallback when pose-conditioned pipeline
+        is unavailable.
         """
-        # Lazy import to avoid circular deps
         from ..runtime.diffusers_pipeline import DiffusersPipeline
         from ..runtime.model_registry import get_model
 
@@ -337,39 +605,19 @@ class ObjectVideoPipeline:
         if spec is None:
             raise ValueError(f"Unknown model: {cfg.model_name}")
 
-        # Decide generation dimensions (respect model limits)
         gen_w, gen_h = spec.snap_dims(cfg.width, cfg.height)
         gen_frames = spec.snap_frames(cfg.num_frames)
 
-        # Create output directory for frames
         out_dir = Path(cfg.output_dir) / "frames"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialise pipeline
         if self._diffusion_pipeline is None or self._diffusion_pipeline.model_name != cfg.model_name:
             self._diffusion_pipeline = DiffusersPipeline(
                 model_name=cfg.model_name,
                 progress_callback=self.progress_callback,
             )
 
-        pipe = self._diffusion_pipeline
-
-        # Check if model supports image-to-video
-        is_i2v = "image-to-video" in spec.modalities
-
-        if is_i2v:
-            logger.info(
-                "Model %s supports image-to-video -- passing source image",
-                spec.display_name,
-            )
-            # For I2V models, we'd pass the image as conditioning.
-            # The DiffusersPipeline currently only exposes text-to-video.
-            # We generate with an enriched prompt that describes the scene.
-            # TODO: extend DiffusersPipeline to accept image conditioning
-            # when the model supports it (LTXImageToVideoPipeline).
-
-        # Generate frames using text prompt
-        frame_paths = pipe.generate_frames(
+        frame_paths = self._diffusion_pipeline.generate_frames(
             prompt=prompt,
             negative_prompt=cfg.negative_prompt,
             width=gen_w,
@@ -382,6 +630,21 @@ class ObjectVideoPipeline:
         )
 
         return frame_paths
+
+    # ── Frame I/O ─────────────────────────────────────────────
+
+    @staticmethod
+    def _save_frames(
+        frames: List[np.ndarray], output_dir: Path
+    ) -> List[str]:
+        """Save numpy RGB frames to PNG files."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for i, frame in enumerate(frames):
+            path = output_dir / f"frame_{i:04d}.png"
+            Image.fromarray(frame).save(str(path))
+            paths.append(str(path))
+        return paths
 
     # ── Video assembly ────────────────────────────────────────
 
@@ -403,8 +666,7 @@ class ObjectVideoPipeline:
                 fps=fps,
             )
         except Exception as e:
-            logger.warning("VideoAssembler failed (%s), trying ffmpeg directly", e)
-            # Fallback: simple ffmpeg concat
+            logger.warning("VideoAssembler failed (%s), trying ffmpeg", e)
             try:
                 from ..video.ffmpeg_wrapper import FFmpegWrapper
                 ff = FFmpegWrapper()
@@ -416,7 +678,7 @@ class ObjectVideoPipeline:
             except Exception as e2:
                 logger.error("FFmpeg fallback also failed: %s", e2)
                 raise RuntimeError(
-                    f"Could not assemble video: {e}; ffmpeg fallback: {e2}"
+                    f"Could not assemble video: {e}; ffmpeg: {e2}"
                 ) from e2
 
         logger.info("Video assembled: %s", video_path)
@@ -432,16 +694,14 @@ class ObjectVideoPipeline:
 
     @staticmethod
     def _extract_subject_hint(prompt: str) -> str:
-        """Pull a rough subject noun from the action prompt for segmentation."""
+        """Pull a rough subject noun from the action prompt."""
         lower = prompt.lower()
-        # Strip common prefixes
         for prefix in ("make the ", "make a ", "animate the ", "animate a ",
                        "let the ", "have the "):
             if lower.startswith(prefix):
                 lower = lower[len(prefix):]
                 break
 
-        # Take the first noun-like word(s) before the verb
         words = lower.split()
         hint_words = []
         _verbs = {"walk", "run", "jump", "drive", "fly", "dance",
@@ -458,10 +718,16 @@ class ObjectVideoPipeline:
 
     # ── Lazy sub-module getters ───────────────────────────────
 
-    def _get_segmenter(self) -> ObjectSegmenter:
-        if self._segmenter is None:
-            self._segmenter = ObjectSegmenter()
-        return self._segmenter
+    def _get_sam2_segmenter(self):
+        if self._sam2_segmenter is None:
+            from .sam2_segmenter import SAM2Segmenter
+            self._sam2_segmenter = SAM2Segmenter()
+        return self._sam2_segmenter
+
+    def _get_legacy_segmenter(self) -> ObjectSegmenter:
+        if self._legacy_segmenter is None:
+            self._legacy_segmenter = ObjectSegmenter()
+        return self._legacy_segmenter
 
     def _get_parser(self) -> ActionParser:
         if self._parser is None:
@@ -477,6 +743,30 @@ class ObjectVideoPipeline:
         if self._stabilizer is None:
             self._stabilizer = TemporalStabilizer()
         return self._stabilizer
+
+    def _get_pose_estimator(self):
+        if self._pose_estimator is None:
+            from .pose_estimator import PoseEstimator
+            self._pose_estimator = PoseEstimator()
+        return self._pose_estimator
+
+    def _get_motion_synthesizer(self):
+        if self._motion_synthesizer is None:
+            from .motion_synthesizer import MotionSynthesizer
+            self._motion_synthesizer = MotionSynthesizer()
+        return self._motion_synthesizer
+
+    def _get_pose_pipeline(self):
+        if self._pose_pipeline is None:
+            from .pose_conditioned_pipeline import PoseConditionedPipeline
+            self._pose_pipeline = PoseConditionedPipeline()
+        return self._pose_pipeline
+
+    def _get_temporal_consistency(self):
+        if self._temporal_consistency is None:
+            from .temporal_consistency import TemporalConsistencyPass
+            self._temporal_consistency = TemporalConsistencyPass()
+        return self._temporal_consistency
 
     # ── Progress reporting ────────────────────────────────────
 

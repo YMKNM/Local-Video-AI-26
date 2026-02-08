@@ -133,11 +133,19 @@ def _run_image_to_video(
         warn_text = ""
         if result.warnings:
             warn_text = "\nWarnings:\n- " + "\n- ".join(result.warnings)
+        seg_info = ""
+        if result.segmentation:
+            retries = getattr(result.segmentation, '_retries_used', 0)
+            seg_info = (
+                f"Seg: {result.segmentation.quality.value} "
+                f"({result.segmentation.confidence:.0%} conf"
+                f"{', ' + str(retries) + ' retries' if retries > 0 else ''})"
+            )
         status = (
             f"Done in {result.elapsed_seconds:.1f}s | "
             f"{len(result.frame_paths)} frames | "
             f"Action: {result.intent.action.value if result.intent else '?'} | "
-            f"Segmentation: {result.segmentation.quality.value if result.segmentation else '?'}"
+            f"{seg_info}"
             f"{warn_text}"
         )
         return result.video_path, status
@@ -153,11 +161,18 @@ def create_image_motion_tab() -> gr.Tab:
 
     with gr.Tab("Image to Video") as tab:
         gr.Markdown("""
-        ## Image-to-Video Animation
+        ## Image-to-Video Animation (v2 -- Pose-Conditioned)
 
         Upload a still image and describe the motion you want.
-        The pipeline segments the subject, plans physically plausible
-        motion, generates video frames, and stabilises the result.
+        The pipeline uses SAM 2 segmentation (with retry), DWPose skeletal
+        extraction, procedural motion synthesis, and AnimateDiff + ControlNet
+        for pose-conditioned video generation.
+
+        **Key features:**
+        - SAM 2 segmentation with retry (never reduces motion on low confidence)
+        - Skeletal pose detection (DWPose / OpenPose / MediaPipe)
+        - Biomechanically correct walk/run/jump/dance cycles
+        - Temporal consistency with optical flow + anti-ghosting
 
         **Example prompts:**
         - *Make the boy run forward*
