@@ -150,21 +150,40 @@ class DiffusersPipeline:
                 )
 
             self._report(2, 4, "Enabling CPU offload...")
-            # LTX-2 with quanto INT8: use sequential (per-layer) CPU offload.
-            # Quanto stores weights as plain int8 tensors + scale factors,
-            # which are fully compatible with accelerate's sequential hooks
-            # (no Params4bit/meta-tensor issues like bitsandbytes).
-            # Each layer is only ~500 MB on GPU → fits easily in 16 GB VRAM.
-            # Total model in RAM (~46 GB INT8) exceeds 34 GB physical RAM
-            # but fits with OS swap; idle sub-models are paged out safely.
+            # LTX-2 with quanto INT8: use group offloading (leaf-level).
+            #
+            # WHY NOT enable_sequential_cpu_offload()?
+            #   accelerate's AlignDevicesHook calls
+            #     set_module_tensor_to_device(module, name, "meta")
+            #   which internally does  param_cls(new_value, requires_grad=...)
+            #   → WeightQBytesTensor.__new__() is missing 6 required args
+            #   → crashes immediately (known diffusers bug #10526).
+            #
+            # WHY NOT enable_model_cpu_offload()?
+            #   Moves whole components to GPU one at a time, but the INT8
+            #   transformer (~18 GB) and text_encoder (~23 GB) each exceed
+            #   16 GB VRAM.
+            #
+            # GROUP OFFLOADING (leaf_level, use_stream=False):
+            #   Uses diffusers' own hooks that transfer via .to(device) —
+            #   no meta-tensor reconstruction, fully compatible with quanto.
+            #   Each leaf module (~one Linear layer, ~100-200 MB INT8) fits
+            #   easily in 16 GB VRAM.  use_stream=False is mandatory because
+            #   the stream path calls param.data.cpu().pin_memory() which
+            #   strips the quanto WeightQBytesTensor wrapper.
             if spec.family == "ltx2":
-                self._pipe.enable_sequential_cpu_offload(device=self.device)
+                self._pipe.enable_group_offload(
+                    onload_device=torch.device(self.device),
+                    offload_device=torch.device("cpu"),
+                    offload_type="leaf_level",
+                    use_stream=False,
+                )
                 # VAE tiling: official LTX-2 docs recommend this to avoid
                 # OOM during VAE decoding (121 frames × 512×768 is heavy).
                 if hasattr(self._pipe, 'vae') and hasattr(self._pipe.vae, 'enable_tiling'):
                     self._pipe.vae.enable_tiling()
                     logger.info("Enabled VAE tiling for LTX-2")
-                logger.info("Using sequential CPU offload for LTX-2 (quanto INT8)")
+                logger.info("Using group offload (leaf-level) for LTX-2 (quanto INT8)")
             else:
                 self._pipe.enable_model_cpu_offload()
         else:
