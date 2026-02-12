@@ -917,8 +917,8 @@ class WebUI:
                             negative_prompt = gr.Textbox(
                                 label="🚫 Negative Prompt (optional)",
                                 placeholder="Blurry, low quality, watermark, static…",
-                                lines=2,
-                                value="Bright tones, overexposed, static, blurred details, subtitles, worst quality, low quality, ugly, deformed",
+                                lines=3,
+                                value="worst quality, inconsistent motion, blurry, jittery, distorted, shaky, glitchy, deformed, disfigured, motion smear, motion artifacts, fused fingers, bad anatomy, weird hand, ugly, transition, static, Bright tones, overexposed, static, blurred details, subtitles, worst quality, low quality, ugly, deformed, blurry, jitter, flicker, camera shake, sudden zoom, scene cuts, distorted face, extra limbs, broken anatomy, melting textures, low resolution, noisy artifacts, inconsistent character design",
                             )
 
                             gr.Markdown("### ⏱️ Duration & Resolution")

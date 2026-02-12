@@ -391,9 +391,15 @@ class DiffusersPipeline:
           - Compatible with sequential CPU offload (plain int8 tensors).
           - Total model ~46 GB: exceeds 34 GB RAM but fits with OS swap.
 
-        CRITICAL: Only quantise transformer + text_encoder.  The VAE,
-        connectors, audio_vae and vocoder MUST stay in BF16 — quantising
-        the VAE destroys decoded pixel quality.
+        CRITICAL NOTES:
+        - Only quantise transformer + text_encoder.  The VAE, connectors,
+          audio_vae and vocoder MUST stay in BF16 — quantising the VAE
+          destroys decoded pixel quality.
+        - The transformer is a diffusers model → needs diffusers QuantoConfig
+          (parameter: ``weights_dtype``).
+        - The text_encoder is a transformers model (Gemma3) → needs
+          **transformers** QuantoConfig (parameter: ``weights``).
+          Using the wrong class causes silent failure / garbage output.
         """
         import psutil
 
@@ -402,16 +408,26 @@ class DiffusersPipeline:
 
         if ram_gb < 64:
             try:
-                from diffusers import QuantoConfig, PipelineQuantizationConfig
+                from diffusers import (
+                    QuantoConfig as DiffusersQuantoConfig,
+                    PipelineQuantizationConfig,
+                )
+                from transformers import QuantoConfig as TransformersQuantoConfig
 
-                # Quanto INT8: each component gets its own QuantoConfig.
-                # PipelineQuantizationConfig.quant_mapping lets us target
-                # only transformer + text_encoder, leaving VAE in BF16.
-                int8_cfg = QuantoConfig(weights_dtype="int8")
+                # PipelineQuantizationConfig.quant_mapping with per-component
+                # configs.  Must use the CORRECT QuantoConfig class per
+                # component: diffusers' for diffusers models, transformers'
+                # for transformers models.  They have different __init__
+                # signatures (weights_dtype vs weights) and are NOT
+                # interchangeable.
                 quant_cfg = PipelineQuantizationConfig(
                     quant_mapping={
-                        "transformer": int8_cfg,
-                        "text_encoder": int8_cfg,
+                        "transformer": DiffusersQuantoConfig(
+                            weights_dtype="int8",
+                        ),
+                        "text_encoder": TransformersQuantoConfig(
+                            weights="int8",
+                        ),
                     }
                 )
                 kwargs["quantization_config"] = quant_cfg
