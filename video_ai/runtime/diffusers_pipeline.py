@@ -118,7 +118,14 @@ class DiffusersPipeline:
 
         # Import the correct pipeline class
         import diffusers
-        PipeClass = getattr(diffusers, spec.pipeline_cls)
+        try:
+            PipeClass = getattr(diffusers, spec.pipeline_cls)
+        except AttributeError:
+            raise RuntimeError(
+                f"Pipeline class '{spec.pipeline_cls}' not found in "
+                f"diffusers {diffusers.__version__}. "
+                f"{'Install diffusers from source: pip install git+https://github.com/huggingface/diffusers' if spec.min_diffusers_version == 'main' else f'Upgrade diffusers to >= {spec.min_diffusers_version}'}"
+            ) from None
 
         # Check available VRAM to decide loading strategy
         vram_gb = 0
@@ -136,7 +143,12 @@ class DiffusersPipeline:
                 torch_dtype=spec.dtype,
             )
             self._report(2, 4, "Enabling model CPU offload...")
-            self._pipe.enable_model_cpu_offload()
+            # LTX-2 / large models: use per-layer sequential offload
+            if spec.family == "ltx2":
+                self._pipe.enable_sequential_cpu_offload(device=self.device)
+                logger.info("Using sequential (per-layer) CPU offload for LTX-2")
+            else:
+                self._pipe.enable_model_cpu_offload()
         else:
             self._using_cpu_offload = False
             self._pipe = PipeClass.from_pretrained(
@@ -302,7 +314,13 @@ class DiffusersPipeline:
         logger.info(f"Diffusion completed in {elapsed:.1f}s ({elapsed/60:.1f} min)")
 
         # ── extract frames from output ────────────────────────
-        # output.frames is typically List[List[PIL.Image]]
+        # LTX-2 returns LTX2PipelineOutput(frames=..., audio=...)
+        # Other pipelines return output.frames[0]
+        audio_tensor = None
+        if hasattr(output, 'audio') and output.audio is not None:
+            audio_tensor = output.audio
+            logger.info("Audio output captured from LTX-2 pipeline")
+
         frames_list = output.frames[0]  # first (and only) batch item
 
         # ── save frames to disk ───────────────────────────────
@@ -326,6 +344,15 @@ class DiffusersPipeline:
                 frame_paths.append(str(fp))
 
             logger.info(f"Saved {len(frame_paths)} frames to {output_dir}")
+
+            # Save audio if LTX-2 produced it
+            if audio_tensor is not None:
+                try:
+                    audio_path = out / "audio.pt"
+                    torch.save(audio_tensor.cpu(), audio_path)
+                    logger.info(f"Saved audio tensor to {audio_path}")
+                except Exception as e:
+                    logger.warning(f"Could not save audio: {e}")
 
         self._report(total_steps, total_steps, "Generation complete")
         return frame_paths

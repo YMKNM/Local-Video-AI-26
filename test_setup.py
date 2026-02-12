@@ -204,6 +204,63 @@ def test_generation_planner():
     print(f"     Steps: {job.num_inference_steps}")
 
 
+def test_model_registry():
+    """Test model registry: LTX-2 registration, RAM gating, compatibility"""
+    print("\n[TEST] Testing Model Registry...")
+
+    from video_ai.runtime.model_registry import (
+        MODEL_REGISTRY, get_model, get_compatible_models,
+        dropdown_choices, model_from_label, Compatibility,
+    )
+
+    # 1. All 5 models registered
+    assert len(MODEL_REGISTRY) == 5, f"Expected 5 models, got {len(MODEL_REGISTRY)}"
+    print("  [OK] 5 models registered")
+
+    # 2. LTX-2 exists with correct fields
+    ltx2 = get_model("ltx-2-19b")
+    assert ltx2 is not None, "LTX-2 not found"
+    assert ltx2.family == "ltx2"
+    assert ltx2.pipeline_cls == "LTX2Pipeline"
+    assert ltx2.min_ram_gb == 64.0
+    assert ltx2.min_diffusers_version == "main"
+    assert ltx2.default_num_frames == 121
+    assert ltx2.native_fps == 24
+    assert "text-to-audio" in ltx2.modalities
+    print("  [OK] LTX-2 19B fields correct")
+
+    # 3. LTX-2 INCOMPATIBLE on 32 GB RAM
+    compat = ltx2.check_compatibility(vram_gb=16.0, disk_free_gb=500.0, ram_gb=32.0)
+    assert compat == Compatibility.INCOMPATIBLE, f"Expected INCOMPATIBLE, got {compat}"
+    print("  [OK] LTX-2 INCOMPATIBLE on 32 GB RAM")
+
+    # 4. LTX-2 not INCOMPATIBLE on 128 GB RAM (passes RAM gate)
+    compat_big = ltx2.check_compatibility(vram_gb=16.0, disk_free_gb=500.0, ram_gb=128.0)
+    assert compat_big != Compatibility.INCOMPATIBLE, f"Expected not INCOMPATIBLE on 128 GB, got {compat_big}"
+    print("  [OK] LTX-2 passes RAM gate on 128 GB")
+
+    # 5. LTX-2 excluded from compatible list on 32 GB RAM
+    compat_models = get_compatible_models(vram_gb=16.0, disk_free_gb=500.0, ram_gb=32.0)
+    ids = [m.id for m in compat_models]
+    assert "ltx-2-19b" not in ids, "LTX-2 should not appear in compatible list"
+    print("  [OK] LTX-2 excluded from dropdown on 32 GB RAM")
+
+    # 6. Other models still compatible
+    assert "wan2.1-t2v-1.3b" in ids, "Wan2.1 should be compatible"
+    print("  [OK] Existing models still compatible")
+
+    # 7. Snap frames works for LTX-2 (8k+1 rule)
+    assert ltx2.snap_frames(100) == 97   # (100-1)//8 * 8 + 1 = 97
+    assert ltx2.snap_frames(121) == 121  # already valid
+    print("  [OK] Frame snapping correct for LTX-2")
+
+    # 8. UI label and reverse lookup
+    label = ltx2.ui_label()
+    assert "LTX-2 19B" in label
+    assert model_from_label(label) is ltx2
+    print("  [OK] UI label/reverse lookup correct")
+
+
 def run_all_tests():
     """Run all tests"""
     print("\n" + "=" * 60)
@@ -219,6 +276,7 @@ def run_all_tests():
         ("Frame Writer", test_frame_writer),
         ("Video Assembly", test_video_assembly),
         ("Generation Planner", test_generation_planner),
+        ("Model Registry", test_model_registry),
     ]
     
     results = {}

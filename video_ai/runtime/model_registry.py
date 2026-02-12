@@ -68,6 +68,10 @@ class ModelSpec:
     vram_base_gb: float = 5.0          # weights on GPU during inference
     vram_per_pixel_frame: float = 1.4e-7  # W*H*F scaling constant
 
+    # ── RAM / diffusers constraints ─────────────────────────
+    min_ram_gb: float = 0.0            # min system RAM required (0 = no check)
+    min_diffusers_version: str = ""    # e.g. "0.37.0" or "main" if unreleased
+
     # ── licensing / provenance ──────────────────────────────
     license: str = "Apache-2.0"
     source_url: str = ""
@@ -94,9 +98,17 @@ class ModelSpec:
         m = self.dim_multiple
         return max(m, (w // m) * m), max(m, (h // m) * m)
 
-    def check_compatibility(self, vram_gb: float, disk_free_gb: float) -> Compatibility:
+    def check_compatibility(
+        self,
+        vram_gb: float,
+        disk_free_gb: float,
+        ram_gb: float = 0.0,
+    ) -> Compatibility:
         """Quick compatibility check against actual hardware."""
         if disk_free_gb < self.disk_gb:
+            return Compatibility.INCOMPATIBLE
+        # RAM gate — models that need more system RAM than available
+        if self.min_ram_gb > 0 and ram_gb > 0 and ram_gb < self.min_ram_gb:
             return Compatibility.INCOMPATIBLE
         # Estimate VRAM at default resolution
         peak = self.estimate_peak_vram(
@@ -239,6 +251,48 @@ _register(ModelSpec(
     notes="Diffusers-native. ~27 GB disk (T5-XXL is ~18 GB). Needs ~28 GB RAM. 24 fps output.",
 ))
 
+# ── 5. LTX-2 19B (audio-video DiT, requires diffusers main) ──────
+# This is a 47B-total-parameter model (19B transformer + 27B Gemma3 text
+# encoder).  The diffusers format weighs ~150 GB on disk.  BF16 loading
+# requires ≥90 GB system RAM.  Even aggressive NF4 quantization (~26 GB)
+# barely fits 32 GB RAM and produces degraded quality.
+# Requires: diffusers ≥0.37.0 (or install from source / "main" branch)
+_register(ModelSpec(
+    id="ltx-2-19b",
+    display_name="LTX-2 19B",
+    family="ltx2",
+    version="1.0",
+    parameters="19B",
+    description="DiT audio-video foundation model. 768p 24fps. Needs ≥64 GB RAM + diffusers main.",
+    repo_id="Lightricks/LTX-2",
+    local_subdir="ltx-2-19b",
+    disk_gb=150,
+    pipeline_cls="LTX2Pipeline",
+    dtype=torch.bfloat16,
+    scheduler_cls="",          # uses built-in FlowMatchEulerDiscreteScheduler
+    scheduler_kwargs={},
+    needs_cpu_offload=True,
+    default_width=768, default_height=512,
+    default_num_frames=121, max_num_frames=257,
+    frame_rule="8k+1", dim_multiple=32,
+    default_steps=40, default_guidance=4.0,
+    native_fps=24,
+    vram_base_gb=5.0,          # sequential CPU offload keeps VRAM low (~3-5 GB)
+    vram_per_pixel_frame=1.2e-7,
+    min_ram_gb=64.0,           # 90 GB BF16; 64 GB with some quantisation
+    min_diffusers_version="main",
+    license="ltx-2-community-license-agreement",
+    source_url="https://huggingface.co/Lightricks/LTX-2",
+    modalities=["text-to-video", "image-to-video", "text-to-audio"],
+    quality_tier="high",
+    notes=(
+        "47B total params (19B transformer + 27B Gemma3 text encoder). "
+        "~150 GB disk. Requires ≥64 GB RAM (BF16 needs ≥90 GB). "
+        "Needs diffusers from source (LTX2Pipeline not in 0.36.0). "
+        "Output includes synchronised audio. 24 fps."
+    ),
+))
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Helpers
@@ -247,6 +301,7 @@ _register(ModelSpec(
 def get_compatible_models(
     vram_gb: Optional[float] = None,
     disk_free_gb: Optional[float] = None,
+    ram_gb: Optional[float] = None,
 ) -> List[ModelSpec]:
     """Return models compatible with the current hardware, sorted best-first."""
     if vram_gb is None:
@@ -262,16 +317,23 @@ def get_compatible_models(
         except Exception:
             disk_free_gb = 100.0
 
+    if ram_gb is None:
+        try:
+            import psutil
+            ram_gb = psutil.virtual_memory().total / (1024**3)
+        except Exception:
+            ram_gb = 32.0  # conservative default
+
     out = []
     for spec in MODEL_REGISTRY.values():
-        compat = spec.check_compatibility(vram_gb, disk_free_gb)
+        compat = spec.check_compatibility(vram_gb, disk_free_gb, ram_gb)
         if compat != Compatibility.INCOMPATIBLE:
             out.append(spec)
 
     # Sort: compatible before conditional, then by quality tier
     tier_order = {"high": 0, "standard": 1, "entry": 2}
     out.sort(key=lambda s: (
-        0 if s.check_compatibility(vram_gb, disk_free_gb) == Compatibility.COMPATIBLE else 1,
+        0 if s.check_compatibility(vram_gb, disk_free_gb, ram_gb) == Compatibility.COMPATIBLE else 1,
         tier_order.get(s.quality_tier, 9),
     ))
     return out
@@ -288,9 +350,10 @@ def get_all_models() -> Dict[str, ModelSpec]:
 def dropdown_choices(
     vram_gb: Optional[float] = None,
     disk_free_gb: Optional[float] = None,
+    ram_gb: Optional[float] = None,
 ) -> List[str]:
     """Return a list of (label) strings suitable for a Gradio Dropdown."""
-    models = get_compatible_models(vram_gb, disk_free_gb)
+    models = get_compatible_models(vram_gb, disk_free_gb, ram_gb)
     return [m.ui_label() for m in models]
 
 

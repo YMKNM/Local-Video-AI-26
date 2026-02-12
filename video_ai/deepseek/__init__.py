@@ -404,7 +404,7 @@ class DeepSeekManager:
             from transformers import TextIteratorStreamer
             streamer = TextIteratorStreamer(
                 tokenizer, skip_prompt=True, skip_special_tokens=True,
-                timeout=60.0,
+                timeout=300.0,
             )
             gen_kwargs = dict(
                 **inputs,
