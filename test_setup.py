@@ -205,7 +205,7 @@ def test_generation_planner():
 
 
 def test_model_registry():
-    """Test model registry: LTX-2 registration, RAM gating, compatibility"""
+    """Test model registry: LTX-2 registration, RAM gating, compatibility, dropdown"""
     print("\n[TEST] Testing Model Registry...")
 
     from video_ai.runtime.model_registry import (
@@ -222,43 +222,58 @@ def test_model_registry():
     assert ltx2 is not None, "LTX-2 not found"
     assert ltx2.family == "ltx2"
     assert ltx2.pipeline_cls == "LTX2Pipeline"
-    assert ltx2.min_ram_gb == 64.0
+    assert ltx2.min_ram_gb == 28.0
     assert ltx2.min_diffusers_version == "main"
     assert ltx2.default_num_frames == 121
     assert ltx2.native_fps == 24
     assert "text-to-audio" in ltx2.modalities
     print("  [OK] LTX-2 19B fields correct")
 
-    # 3. LTX-2 INCOMPATIBLE on 32 GB RAM
-    compat = ltx2.check_compatibility(vram_gb=16.0, disk_free_gb=500.0, ram_gb=32.0)
-    assert compat == Compatibility.INCOMPATIBLE, f"Expected INCOMPATIBLE, got {compat}"
-    print("  [OK] LTX-2 INCOMPATIBLE on 32 GB RAM")
+    # 3. LTX-2 INCOMPATIBLE on 24 GB RAM (below 28 GB min)
+    compat = ltx2.check_compatibility(vram_gb=16.0, disk_free_gb=500.0, ram_gb=24.0)
+    assert compat == Compatibility.INCOMPATIBLE, f"Expected INCOMPATIBLE on 24 GB, got {compat}"
+    print("  [OK] LTX-2 INCOMPATIBLE on 24 GB RAM")
 
-    # 4. LTX-2 not INCOMPATIBLE on 128 GB RAM (passes RAM gate)
+    # 4. LTX-2 not INCOMPATIBLE on 32 GB RAM (passes RAM gate with NF4)
+    compat_32 = ltx2.check_compatibility(vram_gb=16.0, disk_free_gb=500.0, ram_gb=32.0)
+    assert compat_32 != Compatibility.INCOMPATIBLE, f"Expected not INCOMPATIBLE on 32 GB, got {compat_32}"
+    print("  [OK] LTX-2 passes RAM gate on 32 GB (NF4)")
+
+    # 5. LTX-2 not INCOMPATIBLE on 128 GB RAM
     compat_big = ltx2.check_compatibility(vram_gb=16.0, disk_free_gb=500.0, ram_gb=128.0)
     assert compat_big != Compatibility.INCOMPATIBLE, f"Expected not INCOMPATIBLE on 128 GB, got {compat_big}"
     print("  [OK] LTX-2 passes RAM gate on 128 GB")
 
-    # 5. LTX-2 excluded from compatible list on 32 GB RAM
+    # 6. get_compatible_models still returns other models
     compat_models = get_compatible_models(vram_gb=16.0, disk_free_gb=500.0, ram_gb=32.0)
     ids = [m.id for m in compat_models]
-    assert "ltx-2-19b" not in ids, "LTX-2 should not appear in compatible list"
-    print("  [OK] LTX-2 excluded from dropdown on 32 GB RAM")
-
-    # 6. Other models still compatible
     assert "wan2.1-t2v-1.3b" in ids, "Wan2.1 should be compatible"
     print("  [OK] Existing models still compatible")
 
-    # 7. Snap frames works for LTX-2 (8k+1 rule)
+    # 7. dropdown_choices(include_all=True) shows all models including incompatible
+    all_labels = dropdown_choices(vram_gb=16.0, disk_free_gb=500.0, ram_gb=24.0, include_all=True)
+    assert len(all_labels) == 5, f"Expected 5 labels, got {len(all_labels)}"
+    has_warning = any("⚠️" in lbl for lbl in all_labels)
+    assert has_warning, "Should have ⚠️ prefix for incompatible models"
+    print("  [OK] dropdown_choices(include_all) shows all 5 with warnings")
+
+    # 8. dropdown_choices default shows LTX-2 (since min_ram=28 < our 32 GB)
+    default_labels = dropdown_choices(vram_gb=16.0, disk_free_gb=500.0, ram_gb=32.0)
+    ltx2_in_default = any("LTX-2 19B" in lbl for lbl in default_labels)
+    assert ltx2_in_default, "LTX-2 should appear in default dropdown on 32 GB RAM"
+    print("  [OK] LTX-2 appears in default dropdown on 32 GB RAM")
+
+    # 9. Snap frames works for LTX-2 (8k+1 rule)
     assert ltx2.snap_frames(100) == 97   # (100-1)//8 * 8 + 1 = 97
     assert ltx2.snap_frames(121) == 121  # already valid
     print("  [OK] Frame snapping correct for LTX-2")
 
-    # 8. UI label and reverse lookup
+    # 10. UI label and reverse lookup (with and without ⚠️ prefix)
     label = ltx2.ui_label()
     assert "LTX-2 19B" in label
     assert model_from_label(label) is ltx2
-    print("  [OK] UI label/reverse lookup correct")
+    assert model_from_label(f"⚠️ {label}") is ltx2  # strip prefix
+    print("  [OK] UI label/reverse lookup correct (with ⚠️ prefix)")
 
 
 def run_all_tests():

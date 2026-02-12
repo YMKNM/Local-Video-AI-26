@@ -138,10 +138,17 @@ class DiffusersPipeline:
             logger.info("Using CPU offload strategy (VRAM <= 20GB)")
             self._using_cpu_offload = True
             self._report(1, 4, "Loading to CPU first...")
-            self._pipe = PipeClass.from_pretrained(
-                source,
-                torch_dtype=spec.dtype,
-            )
+
+            # LTX-2 family: use NF4 quantisation when system RAM < 64 GB
+            if spec.family == "ltx2":
+                load_kwargs = self._ltx2_load_kwargs(source, spec)
+                self._pipe = PipeClass.from_pretrained(source, **load_kwargs)
+            else:
+                self._pipe = PipeClass.from_pretrained(
+                    source,
+                    torch_dtype=spec.dtype,
+                )
+
             self._report(2, 4, "Enabling model CPU offload...")
             # LTX-2 / large models: use per-layer sequential offload
             if spec.family == "ltx2":
@@ -356,6 +363,42 @@ class DiffusersPipeline:
 
         self._report(total_steps, total_steps, "Generation complete")
         return frame_paths
+
+    # ── LTX-2 quantisation helpers ─────────────────────────────
+
+    def _ltx2_load_kwargs(self, source: str, spec: ModelSpec) -> dict:
+        """Build from_pretrained kwargs for LTX-2, using NF4 on RAM-limited systems."""
+        import psutil
+
+        ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+        kwargs: dict = {"torch_dtype": spec.dtype}
+
+        if ram_gb < 64:
+            # NF4 quantisation keeps peak RAM ~25 GB instead of ~90 GB
+            try:
+                from diffusers import BitsAndBytesConfig
+
+                nf4 = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                )
+                kwargs["quantization_config"] = nf4
+                logger.info(
+                    f"LTX-2: system RAM {ram_gb:.0f} GB < 64 GB — "
+                    f"using NF4 quantisation for transformer + text encoder"
+                )
+            except ImportError:
+                logger.warning(
+                    "bitsandbytes not installed — cannot quantise LTX-2. "
+                    "Install with: pip install bitsandbytes"
+                )
+            except Exception as e:
+                logger.warning(f"NF4 quantisation setup failed: {e}")
+        else:
+            logger.info(f"LTX-2: {ram_gb:.0f} GB RAM available — loading BF16")
+
+        return kwargs
 
     # ── helpers ────────────────────────────────────────────────
 

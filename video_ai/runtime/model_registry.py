@@ -263,10 +263,10 @@ _register(ModelSpec(
     family="ltx2",
     version="1.0",
     parameters="19B",
-    description="DiT audio-video foundation model. 768p 24fps. Needs ≥64 GB RAM + diffusers main.",
+    description="DiT audio-video foundation model. 768p 24fps. Auto-NF4 on <64 GB RAM.",
     repo_id="Lightricks/LTX-2",
     local_subdir="ltx-2-19b",
-    disk_gb=150,
+    disk_gb=95,                # diffusers-format download (~38 GB transformer + ~50 GB text encoder + extras)
     pipeline_cls="LTX2Pipeline",
     dtype=torch.bfloat16,
     scheduler_cls="",          # uses built-in FlowMatchEulerDiscreteScheduler
@@ -279,7 +279,7 @@ _register(ModelSpec(
     native_fps=24,
     vram_base_gb=5.0,          # sequential CPU offload keeps VRAM low (~3-5 GB)
     vram_per_pixel_frame=1.2e-7,
-    min_ram_gb=64.0,           # 90 GB BF16; 64 GB with some quantisation
+    min_ram_gb=28.0,           # NF4 quantised: ~25 GB total in RAM
     min_diffusers_version="main",
     license="ltx-2-community-license-agreement",
     source_url="https://huggingface.co/Lightricks/LTX-2",
@@ -287,8 +287,8 @@ _register(ModelSpec(
     quality_tier="high",
     notes=(
         "47B total params (19B transformer + 27B Gemma3 text encoder). "
-        "~150 GB disk. Requires ≥64 GB RAM (BF16 needs ≥90 GB). "
-        "Needs diffusers from source (LTX2Pipeline not in 0.36.0). "
+        "~95 GB disk. Uses NF4 quantisation on ≤64 GB RAM systems. "
+        "Requires diffusers from source (LTX2Pipeline). "
         "Output includes synchronised audio. 24 fps."
     ),
 ))
@@ -351,15 +351,51 @@ def dropdown_choices(
     vram_gb: Optional[float] = None,
     disk_free_gb: Optional[float] = None,
     ram_gb: Optional[float] = None,
+    include_all: bool = True,
 ) -> List[str]:
-    """Return a list of (label) strings suitable for a Gradio Dropdown."""
-    models = get_compatible_models(vram_gb, disk_free_gb, ram_gb)
-    return [m.ui_label() for m in models]
+    """Return a list of (label) strings suitable for a Gradio Dropdown.
+
+    When *include_all* is True (default), models that are INCOMPATIBLE with
+    the detected hardware are still shown but prefixed with ⚠️.
+    """
+    if not include_all:
+        models = get_compatible_models(vram_gb, disk_free_gb, ram_gb)
+        return [m.ui_label() for m in models]
+
+    # Auto-detect hardware once
+    if vram_gb is None:
+        try:
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        except Exception:
+            vram_gb = 16.0
+    if disk_free_gb is None:
+        import shutil
+        try:
+            disk_free_gb = shutil.disk_usage(Path(__file__).anchor).free / (1024**3)
+        except Exception:
+            disk_free_gb = 100.0
+    if ram_gb is None:
+        try:
+            import psutil
+            ram_gb = psutil.virtual_memory().total / (1024**3)
+        except Exception:
+            ram_gb = 32.0
+
+    labels: List[str] = []
+    for spec in MODEL_REGISTRY.values():
+        compat = spec.check_compatibility(vram_gb, disk_free_gb, ram_gb)
+        prefix = "⚠️ " if compat == Compatibility.INCOMPATIBLE else ""
+        labels.append(f"{prefix}{spec.ui_label()}")
+    return labels
 
 
 def model_from_label(label: str) -> Optional[ModelSpec]:
-    """Reverse-lookup a ModelSpec from its UI label."""
+    """Reverse-lookup a ModelSpec from its UI label.
+
+    Handles the optional ⚠️ prefix added by dropdown_choices().
+    """
+    clean = label.lstrip("⚠️ ").strip()
     for spec in MODEL_REGISTRY.values():
-        if spec.ui_label() == label:
+        if spec.ui_label() == clean or spec.ui_label() == label:
             return spec
     return None
