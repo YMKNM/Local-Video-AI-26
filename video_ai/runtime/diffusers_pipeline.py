@@ -304,18 +304,23 @@ class DiffusersPipeline:
 
         start = time.time()
 
+        # Build call kwargs — LTX-2 needs frame_rate
+        call_kwargs = dict(
+            prompt=prompt,
+            negative_prompt=negative_prompt or None,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            generator=generator,
+            callback_on_step_end=step_callback,
+        )
+        if spec.family == "ltx2":
+            call_kwargs["frame_rate"] = float(spec.native_fps)
+
         with torch.inference_mode():
-            output = self._pipe(
-                prompt=prompt,
-                negative_prompt=negative_prompt or None,
-                height=height,
-                width=width,
-                num_frames=num_frames,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                generator=generator,
-                callback_on_step_end=step_callback,
-            )
+            output = self._pipe(**call_kwargs)
 
         elapsed = time.time() - start
         logger.info(f"Diffusion completed in {elapsed:.1f}s ({elapsed/60:.1f} min)")
@@ -367,30 +372,42 @@ class DiffusersPipeline:
     # ── LTX-2 quantisation helpers ─────────────────────────────
 
     def _ltx2_load_kwargs(self, source: str, spec: ModelSpec) -> dict:
-        """Build from_pretrained kwargs for LTX-2, using NF4 on RAM-limited systems."""
+        """Build from_pretrained kwargs for LTX-2, using NF4 on RAM-limited systems.
+
+        CRITICAL: Only quantise transformer + text_encoder.  The VAE, connectors,
+        audio_vae and vocoder MUST stay in BF16 — quantising the VAE destroys
+        decoded pixel quality and produces garbled / text-like frames.
+        """
         import psutil
 
         ram_gb = psutil.virtual_memory().total / (1024 ** 3)
         kwargs: dict = {"torch_dtype": spec.dtype}
 
         if ram_gb < 64:
-            # NF4 quantisation keeps peak RAM ~25 GB instead of ~90 GB
+            # NF4 quantisation keeps peak RAM ~26 GB instead of ~90 GB
             try:
-                from diffusers import BitsAndBytesConfig
+                from diffusers import PipelineQuantizationConfig
 
-                nf4 = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_compute_dtype=torch.bfloat16,
+                quant_cfg = PipelineQuantizationConfig(
+                    quant_backend="bitsandbytes_4bit",
+                    quant_kwargs={
+                        "load_in_4bit": True,
+                        "bnb_4bit_quant_type": "nf4",
+                        "bnb_4bit_compute_dtype": torch.bfloat16,
+                    },
+                    # Only quantise the two large sub-models.
+                    # VAE / connectors / vocoder stay BF16 for output quality.
+                    components_to_quantize=["transformer", "text_encoder"],
                 )
-                kwargs["quantization_config"] = nf4
+                kwargs["quantization_config"] = quant_cfg
                 logger.info(
                     f"LTX-2: system RAM {ram_gb:.0f} GB < 64 GB — "
-                    f"using NF4 quantisation for transformer + text encoder"
+                    f"NF4 quantisation for transformer + text_encoder only"
                 )
             except ImportError:
                 logger.warning(
-                    "bitsandbytes not installed — cannot quantise LTX-2. "
+                    "PipelineQuantizationConfig or bitsandbytes not available — "
+                    "cannot quantise LTX-2. "
                     "Install with: pip install bitsandbytes"
                 )
             except Exception as e:
