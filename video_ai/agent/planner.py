@@ -260,13 +260,23 @@ class GenerationPlanner:
             num_frames = suggested['frames']
             duration_seconds = num_frames / fps
         
-        # Expand the prompt
+        # Expand the prompt (model-family-aware for negative prompts & tags)
+        model_family = ""
+        try:
+            from ..runtime.model_registry import get_model
+            spec = get_model(model_name)
+            if spec:
+                model_family = spec.family or ""
+        except Exception:
+            pass
+
         expanded = self.prompt_engine.expand(
             prompt,
             fps=fps,
             duration=duration_seconds,
             resolution=(width, height),
-            seed=seed
+            seed=seed,
+            model_family=model_family,
         )
         
         # Use seed from expanded prompt if not specified

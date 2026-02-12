@@ -232,9 +232,26 @@ class PromptEngine:
             return style_templates[style].get('tags', [])
         return []
     
-    def generate_negative_prompt(self, style: str = None) -> str:
-        """Generate appropriate negative prompt"""
-        # Get default negative prompts
+    def generate_negative_prompt(self, style: str = None, model_family: str = "") -> str:
+        """Generate appropriate negative prompt.
+
+        Args:
+            style: Visual style (cinematic, anime, etc.)
+            model_family: Model family identifier (e.g. "ltx2", "wan", "cogvideox").
+                          When set, model-specific negatives are included.
+        """
+        # ── Model-specific negative prompts ──────────────────────
+        # LTX-2 official docs recommend a dedicated negative prompt that
+        # dramatically improves motion quality and prompt adherence.
+        if model_family == "ltx2":
+            return (
+                "worst quality, inconsistent motion, blurry, jittery, distorted, "
+                "shaky, glitchy, deformed, disfigured, motion smear, "
+                "motion artifacts, fused fingers, bad anatomy, weird hand, "
+                "ugly, transition, static"
+            )
+
+        # ── Generic negative prompt ──────────────────────────────
         prompt_config = self.defaults.get('prompt_expansion', {})
         negative_defaults = prompt_config.get('negative_prompt_defaults', [
             "blurry", "low quality", "distorted", "watermark",
@@ -265,7 +282,8 @@ class PromptEngine:
         duration: float = 6.0,
         resolution: tuple = (854, 480),
         seed: Optional[int] = None,
-        enhance_quality: bool = True
+        enhance_quality: bool = True,
+        model_family: str = "",
     ) -> ExpandedPrompt:
         """
         Expand a raw prompt into a detailed, model-optimized prompt.
@@ -280,6 +298,7 @@ class PromptEngine:
             resolution: Output resolution (width, height)
             seed: Random seed for reproducibility
             enhance_quality: Whether to add quality enhancement tags
+            model_family: Model family identifier (e.g. "ltx2", "wan").
             
         Returns:
             ExpandedPrompt with all details
@@ -304,10 +323,15 @@ class PromptEngine:
         # Build expanded prompt
         expanded_parts = [prompt]
         
-        # Add camera motion tags
-        camera_tags = self.get_camera_tags(final_camera)
-        if camera_tags:
-            expanded_parts.append(camera_tags[0])  # Add primary tag
+        # Add camera motion tags — but SKIP the auto-detected "static" default.
+        # Appending "static shot" to a prompt like "dancing chicken" actively
+        # tells the model to produce no motion.  Only add camera tags when the
+        # user explicitly requested a camera style OR the detector found a
+        # non-static keyword in the prompt.
+        if final_camera != "static" or camera_motion is not None:
+            camera_tags = self.get_camera_tags(final_camera)
+            if camera_tags:
+                expanded_parts.append(camera_tags[0])  # Add primary tag
         
         # Add lighting tags
         lighting_tags = self.get_lighting_tags(final_lighting)
@@ -330,8 +354,8 @@ class PromptEngine:
         # Combine into final prompt
         expanded = ", ".join(expanded_parts)
         
-        # Generate negative prompt
-        negative = self.generate_negative_prompt(final_style)
+        # Generate negative prompt (model-family-aware)
+        negative = self.generate_negative_prompt(final_style, model_family=model_family)
         
         # Create expanded prompt object
         return ExpandedPrompt(

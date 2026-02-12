@@ -159,6 +159,11 @@ class DiffusersPipeline:
             # Peak VRAM ≈ largest single sub-model (~12 GB NF4 text encoder).
             if spec.family == "ltx2":
                 self._pipe.enable_model_cpu_offload(device=self.device)
+                # VAE tiling: official LTX-2 docs recommend this to avoid
+                # OOM during VAE decoding (121 frames × 512×768 is heavy).
+                if hasattr(self._pipe, 'vae') and hasattr(self._pipe.vae, 'enable_tiling'):
+                    self._pipe.vae.enable_tiling()
+                    logger.info("Enabled VAE tiling for LTX-2")
                 logger.info("Using model-level CPU offload for LTX-2 (NF4-safe)")
             else:
                 self._pipe.enable_model_cpu_offload()
