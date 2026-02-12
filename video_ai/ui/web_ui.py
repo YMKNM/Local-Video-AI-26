@@ -57,6 +57,13 @@ try:
 except ImportError:
     IMAGE_MOTION_TAB_AVAILABLE = False
 
+# Import DeepSeek (Offline LLM) tab
+try:
+    from .deepseek_tab import create_deepseek_tab
+    DEEPSEEK_TAB_AVAILABLE = True
+except ImportError:
+    DEEPSEEK_TAB_AVAILABLE = False
+
 # Import model registry
 try:
     from ..runtime.model_registry import (
@@ -1166,6 +1173,11 @@ class WebUI:
                 if IMAGE_MOTION_TAB_AVAILABLE:
                     with gr.TabItem("Image to Video", id="image_motion"):
                         create_image_motion_tab()
+
+                # ━━━━━━━━━━━━━━  DEEPSEEK LLM TAB (if available)  ━━
+                if DEEPSEEK_TAB_AVAILABLE:
+                    with gr.TabItem("DeepSeek (Offline LLM)", id="deepseek_llm"):
+                        create_deepseek_tab()
 
             # ── Footer ──────────────────────────────────────
             gr.HTML("""
