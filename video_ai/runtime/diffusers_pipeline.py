@@ -150,10 +150,16 @@ class DiffusersPipeline:
                 )
 
             self._report(2, 4, "Enabling model CPU offload...")
-            # LTX-2 / large models: use per-layer sequential offload
+            # LTX-2: use model-level (whole-submodel) CPU offload.
+            # Sequential (per-layer) offload replaces parameters with meta
+            # tensors, which is INCOMPATIBLE with bitsandbytes NF4 weights
+            # ("Cannot copy out of meta tensor; no data!").
+            # Model-level offload moves entire sub-models CPU↔GPU without
+            # touching parameter storage, so quantised weights stay intact.
+            # Peak VRAM ≈ largest single sub-model (~12 GB NF4 text encoder).
             if spec.family == "ltx2":
-                self._pipe.enable_sequential_cpu_offload(device=self.device)
-                logger.info("Using sequential (per-layer) CPU offload for LTX-2")
+                self._pipe.enable_model_cpu_offload(device=self.device)
+                logger.info("Using model-level CPU offload for LTX-2 (NF4-safe)")
             else:
                 self._pipe.enable_model_cpu_offload()
         else:
