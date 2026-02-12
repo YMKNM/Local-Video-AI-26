@@ -149,22 +149,22 @@ class DiffusersPipeline:
                     torch_dtype=spec.dtype,
                 )
 
-            self._report(2, 4, "Enabling model CPU offload...")
-            # LTX-2: use model-level (whole-submodel) CPU offload.
-            # Sequential (per-layer) offload replaces parameters with meta
-            # tensors, which is INCOMPATIBLE with bitsandbytes NF4 weights
-            # ("Cannot copy out of meta tensor; no data!").
-            # Model-level offload moves entire sub-models CPU↔GPU without
-            # touching parameter storage, so quantised weights stay intact.
-            # Peak VRAM ≈ largest single sub-model (~12 GB NF4 text encoder).
+            self._report(2, 4, "Enabling CPU offload...")
+            # LTX-2 with quanto INT8: use sequential (per-layer) CPU offload.
+            # Quanto stores weights as plain int8 tensors + scale factors,
+            # which are fully compatible with accelerate's sequential hooks
+            # (no Params4bit/meta-tensor issues like bitsandbytes).
+            # Each layer is only ~500 MB on GPU → fits easily in 16 GB VRAM.
+            # Total model in RAM (~46 GB INT8) exceeds 34 GB physical RAM
+            # but fits with OS swap; idle sub-models are paged out safely.
             if spec.family == "ltx2":
-                self._pipe.enable_model_cpu_offload(device=self.device)
+                self._pipe.enable_sequential_cpu_offload(device=self.device)
                 # VAE tiling: official LTX-2 docs recommend this to avoid
                 # OOM during VAE decoding (121 frames × 512×768 is heavy).
                 if hasattr(self._pipe, 'vae') and hasattr(self._pipe.vae, 'enable_tiling'):
                     self._pipe.vae.enable_tiling()
                     logger.info("Enabled VAE tiling for LTX-2")
-                logger.info("Using model-level CPU offload for LTX-2 (NF4-safe)")
+                logger.info("Using sequential CPU offload for LTX-2 (quanto INT8)")
             else:
                 self._pipe.enable_model_cpu_offload()
         else:
@@ -383,11 +383,17 @@ class DiffusersPipeline:
     # ── LTX-2 quantisation helpers ─────────────────────────────
 
     def _ltx2_load_kwargs(self, source: str, spec: ModelSpec) -> dict:
-        """Build from_pretrained kwargs for LTX-2, using NF4 on RAM-limited systems.
+        """Build from_pretrained kwargs for LTX-2 with INT8 quantisation.
 
-        CRITICAL: Only quantise transformer + text_encoder.  The VAE, connectors,
-        audio_vae and vocoder MUST stay in BF16 — quantising the VAE destroys
-        decoded pixel quality and produces garbled / text-like frames.
+        Uses **quanto INT8** for the transformer and text_encoder:
+          - 2× better precision than NF4 → much better prompt adherence
+            and temporal coherence.
+          - Compatible with sequential CPU offload (plain int8 tensors).
+          - Total model ~46 GB: exceeds 34 GB RAM but fits with OS swap.
+
+        CRITICAL: Only quantise transformer + text_encoder.  The VAE,
+        connectors, audio_vae and vocoder MUST stay in BF16 — quantising
+        the VAE destroys decoded pixel quality.
         """
         import psutil
 
@@ -395,34 +401,33 @@ class DiffusersPipeline:
         kwargs: dict = {"torch_dtype": spec.dtype}
 
         if ram_gb < 64:
-            # NF4 quantisation keeps peak RAM ~26 GB instead of ~90 GB
             try:
-                from diffusers import PipelineQuantizationConfig
+                from diffusers import QuantoConfig, PipelineQuantizationConfig
 
+                # Quanto INT8: each component gets its own QuantoConfig.
+                # PipelineQuantizationConfig.quant_mapping lets us target
+                # only transformer + text_encoder, leaving VAE in BF16.
+                int8_cfg = QuantoConfig(weights_dtype="int8")
                 quant_cfg = PipelineQuantizationConfig(
-                    quant_backend="bitsandbytes_4bit",
-                    quant_kwargs={
-                        "load_in_4bit": True,
-                        "bnb_4bit_quant_type": "nf4",
-                        "bnb_4bit_compute_dtype": torch.bfloat16,
-                    },
-                    # Only quantise the two large sub-models.
-                    # VAE / connectors / vocoder stay BF16 for output quality.
-                    components_to_quantize=["transformer", "text_encoder"],
+                    quant_mapping={
+                        "transformer": int8_cfg,
+                        "text_encoder": int8_cfg,
+                    }
                 )
                 kwargs["quantization_config"] = quant_cfg
                 logger.info(
-                    f"LTX-2: system RAM {ram_gb:.0f} GB < 64 GB — "
-                    f"NF4 quantisation for transformer + text_encoder only"
+                    f"LTX-2: system RAM {ram_gb:.0f} GB — "
+                    f"quanto INT8 for transformer + text_encoder "
+                    f"(~46 GB total, swap will be used)"
                 )
             except ImportError:
                 logger.warning(
-                    "PipelineQuantizationConfig or bitsandbytes not available — "
-                    "cannot quantise LTX-2. "
-                    "Install with: pip install bitsandbytes"
+                    "PipelineQuantizationConfig, QuantoConfig, or optimum-quanto "
+                    "not available — cannot INT8-quantise LTX-2. "
+                    "Install with: pip install optimum-quanto"
                 )
             except Exception as e:
-                logger.warning(f"NF4 quantisation setup failed: {e}")
+                logger.warning(f"INT8 quantisation setup failed: {e}")
         else:
             logger.info(f"LTX-2: {ram_gb:.0f} GB RAM available — loading BF16")
 
