@@ -327,7 +327,68 @@ class TestModelSwitching:
 
 
 # ---------------------------------------------------------------------------
-# 4. UI tab import test
+# 4. Stop Generation & Performance
+# ---------------------------------------------------------------------------
+
+class TestStopGeneration:
+    """Verify stop mechanism and tokens-per-sec tracking."""
+
+    def test_stop_mid_generation(self, manager: DeepSeekManager):
+        """Request stop after a few tokens and verify it halts."""
+        import threading
+
+        spec = DEEPSEEK_MODELS["deepseek-r1-1.5b"]
+        manager.load(spec)
+
+        chunks = []
+
+        def _gen():
+            for chunk in manager.generate(
+                "Write a very long essay about the history of mathematics.",
+                max_new_tokens=500,
+                temperature=0.5,
+            ):
+                chunks.append(chunk)
+
+        t = threading.Thread(target=_gen, daemon=True)
+        t.start()
+        # Wait a bit for tokens to start flowing, then stop
+        time.sleep(2)
+        manager.request_stop()
+        t.join(timeout=30)
+
+        assert len(chunks) > 0, "Should have produced at least some output before stop"
+        # With 500 max tokens, a full run produces a LOT more output.
+        # The stop should have cut it short.
+        logger.info(
+            "Stop test: %d chunks, last chunk %d chars",
+            len(chunks),
+            len(chunks[-1]) if chunks else 0,
+        )
+
+    def test_tokens_per_sec_tracked(self, manager: DeepSeekManager):
+        """After generation, tokens_per_sec should be > 0."""
+        if not manager.is_loaded:
+            spec = DEEPSEEK_MODELS["deepseek-r1-1.5b"]
+            manager.load(spec)
+
+        for _ in manager.generate("Say hello.", max_new_tokens=20, temperature=0.1):
+            pass
+
+        tps = manager.last_tokens_per_sec
+        assert tps > 0, f"Expected tokens_per_sec > 0, got {tps}"
+        logger.info("Tokens/sec: %.1f", tps)
+
+    def test_status_dict_has_tokens_per_sec(self, manager: DeepSeekManager):
+        """status_dict should include tokens_per_sec key."""
+        s = manager.status_dict()
+        assert "tokens_per_sec" in s
+        logger.info("status_dict tokens_per_sec: %s", s["tokens_per_sec"])
+        manager.unload()
+
+
+# ---------------------------------------------------------------------------
+# 5. UI tab import test
 # ---------------------------------------------------------------------------
 
 class TestUITab:

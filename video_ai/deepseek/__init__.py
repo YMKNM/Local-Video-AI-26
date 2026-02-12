@@ -198,6 +198,11 @@ class DeepSeekManager:
         self._streamer = None
         self._loaded_spec: Optional[DeepSeekModelSpec] = None
         self._load_time: float = 0.0
+        # Stop flag – checked each streaming iteration
+        self._stop_event = threading.Event()
+        # Generation metrics
+        self._last_gen_tokens: int = 0
+        self._last_gen_time: float = 0.0
 
     # ── properties ──────────────────────────────────────────
 
@@ -208,6 +213,20 @@ class DeepSeekManager:
     @property
     def loaded_spec(self) -> Optional[DeepSeekModelSpec]:
         return self._loaded_spec
+
+    @property
+    def last_tokens_per_sec(self) -> float:
+        """Return tokens/sec from the most recent generation."""
+        if self._last_gen_time > 0:
+            return round(self._last_gen_tokens / self._last_gen_time, 1)
+        return 0.0
+
+    # ── stop ────────────────────────────────────────────────
+
+    def request_stop(self) -> None:
+        """Signal the current generation to stop after the next token."""
+        self._stop_event.set()
+        logger.info("Stop requested for DeepSeek generation.")
 
     # ── unload ──────────────────────────────────────────────
 
@@ -342,9 +361,15 @@ class DeepSeekManager:
         Generate text from the loaded model.
 
         Yields partial strings when *stream=True*, or a single final string.
+        Respects ``request_stop()`` — will stop after the current token.
         """
         if not self.is_loaded:
             raise RuntimeError("No model loaded. Load a model first.")
+
+        # Clear any previous stop signal
+        self._stop_event.clear()
+        self._last_gen_tokens = 0
+        self._last_gen_time = 0.0
 
         torch = _get_torch()
         transformers = _get_transformers()
@@ -371,11 +396,15 @@ class DeepSeekManager:
         inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
         input_len = inputs["input_ids"].shape[-1]
 
+        t0 = time.time()
+        token_count = 0
+
         if stream:
             # Streaming with TextIteratorStreamer
             from transformers import TextIteratorStreamer
             streamer = TextIteratorStreamer(
                 tokenizer, skip_prompt=True, skip_special_tokens=True,
+                timeout=60.0,
             )
             gen_kwargs = dict(
                 **inputs,
@@ -392,11 +421,18 @@ class DeepSeekManager:
             thread.start()
 
             generated = ""
+            stopped = False
             for chunk in streamer:
+                if self._stop_event.is_set():
+                    stopped = True
+                    break
                 generated += chunk
-                yield generated       # yield cumulative text
+                token_count += 1
+                yield generated
 
-            thread.join(timeout=120)
+            if stopped:
+                logger.info("Generation stopped by user after %d chunks.", token_count)
+            thread.join(timeout=30)
         else:
             with torch.no_grad():
                 outputs = model.generate(
@@ -407,7 +443,12 @@ class DeepSeekManager:
                     do_sample=(temperature > 0.01),
                 )
             new_tokens = outputs[0][input_len:]
+            token_count = len(new_tokens)
             yield tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+        elapsed = time.time() - t0
+        self._last_gen_tokens = token_count
+        self._last_gen_time = elapsed
 
     # ── status ──────────────────────────────────────────────
 
@@ -428,16 +469,20 @@ class DeepSeekManager:
             "ram_used_gb": round(ram.used / 1e9, 1),
             "ram_total_gb": round(ram.total / 1e9, 1),
             "gpu_name": gpu.get("name", "N/A"),
+            "tokens_per_sec": self.last_tokens_per_sec,
         }
         return result
 
     def status_text(self) -> str:
         """Human-readable status string for the UI."""
         s = self.status_dict()
+        tps = s["tokens_per_sec"]
+        tps_str = f"{tps} tok/s" if tps > 0 else "-"
         lines = [
             f"Model:   {s['model_name']}  ({s['model_params']}, {s['quant']})",
             f"Backend: {s['backend']}",
             f"Load:    {s['load_time_s']}s",
+            f"Speed:   {tps_str}",
             f"VRAM:    {s['vram_allocated_gb']:.1f} / {s['vram_total_gb']:.1f} GB",
             f"RAM:     {s['ram_used_gb']:.1f} / {s['ram_total_gb']:.1f} GB",
             f"GPU:     {s['gpu_name']}",

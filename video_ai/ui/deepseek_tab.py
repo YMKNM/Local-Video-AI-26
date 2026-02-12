@@ -1,29 +1,35 @@
 """
-DeepSeek (Offline LLM) — Gradio Tab
-====================================
-Adds a "DeepSeek (Offline LLM)" tab to Video AI Studio.
+DeepSeek (Offline LLM) — Gradio Tab  (Copilot-style layout)
+=============================================================
+Two-panel design:
+  Left  – Model selector, info card, load/unload, generation sliders, system status
+  Right – Chat conversation history (gr.Chatbot), prompt input, Generate + Stop buttons
 
-Features:
-  - Model selector dropdown (3 validated models)
-  - Prompt input, max-tokens, temperature, top-p controls
-  - Context-length display (auto-updates per model)
-  - Load / Unload / Generate buttons
-  - Streaming text output
-  - System status panel (VRAM, RAM, backend)
+Features preserved from the original tab:
+  - 3 validated model dropdown with auto-defaults
+  - VRAM / RAM checks, quantisation info
+  - Streaming generation
+  - System status panel
+
+New:
+  - Conversation history with user / assistant distinction
+  - Stop Generation button (safe interruption via threading.Event)
+  - Tokens-per-second metric
 """
 
 from __future__ import annotations
 
 import logging
 import traceback
-from typing import Any, Optional
+from typing import Any, Generator, List, Optional, Tuple
 
 import gradio as gr
 
 logger = logging.getLogger(__name__)
 
-# Lazy import backend so the file stays importable even when heavy deps
-# are missing.
+# ---------------------------------------------------------------------------
+# Lazy imports
+# ---------------------------------------------------------------------------
 _BACKEND_AVAILABLE = True
 try:
     from ..deepseek import (
@@ -43,8 +49,8 @@ except ImportError:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _spec_info_md(spec: Optional[DeepSeekModelSpec]) -> str:
-    """Build a Markdown status block for a model spec."""
+def _spec_info_md(spec: Optional["DeepSeekModelSpec"] = None) -> str:
+    """Markdown card showing model details."""
     if spec is None:
         return "_Select a model above._"
     return (
@@ -64,7 +70,7 @@ def _spec_info_md(spec: Optional[DeepSeekModelSpec]) -> str:
 
 
 def _status_md() -> str:
-    """Return system status as Markdown."""
+    """Return system status as Markdown code block."""
     if not _BACKEND_AVAILABLE:
         return "Backend not available."
     mgr = get_manager()
@@ -75,22 +81,29 @@ def _status_md() -> str:
 # Tab Constructor
 # ---------------------------------------------------------------------------
 
-def create_deepseek_tab() -> None:
-    """Create the full DeepSeek (Offline LLM) tab contents.
+def create_deepseek_tab() -> None:  # noqa: C901
+    """Create the Copilot-style DeepSeek chat tab.
 
-    Call this inside a ``gr.TabItem`` context.
+    Call inside a ``gr.TabItem`` context.
     """
     if not _BACKEND_AVAILABLE:
-        gr.Markdown("## DeepSeek backend is not available.\n\nPlease install dependencies:\n```\npip install transformers accelerate bitsandbytes psutil\n```")
+        gr.Markdown(
+            "## DeepSeek backend is not available.\n\n"
+            "Install dependencies:\n```\npip install transformers accelerate bitsandbytes psutil\n```"
+        )
         return
 
     choices = deepseek_dropdown_choices()
 
-    gr.Markdown("### DeepSeek — Local Offline LLM Inference")
+    gr.Markdown("### DeepSeek — Local Offline LLM")
 
     with gr.Row(equal_height=False):
-        # ── Left column: controls ───────────────────────────
-        with gr.Column(scale=1):
+        # ================================================================
+        # LEFT PANEL – settings & status
+        # ================================================================
+        with gr.Column(scale=1, min_width=320):
+            # -- Model selector -----------------------------------------
+            gr.Markdown("#### Model")
             model_dd = gr.Dropdown(
                 choices=choices,
                 value=choices[0] if choices else None,
@@ -111,19 +124,13 @@ def create_deepseek_tab() -> None:
             load_status = gr.Textbox(
                 label="Load Status",
                 interactive=False,
-                lines=3,
-                max_lines=5,
+                lines=2,
+                max_lines=4,
             )
 
+            # -- Generation sliders -------------------------------------
             gr.Markdown("---")
             gr.Markdown("#### Generation Settings")
-
-            prompt_input = gr.Textbox(
-                label="Prompt",
-                placeholder="Enter your prompt here ...",
-                lines=5,
-                max_lines=15,
-            )
 
             max_tokens = gr.Slider(
                 minimum=16,
@@ -148,52 +155,57 @@ def create_deepseek_tab() -> None:
                 maximum=1.0,
                 value=0.9,
                 step=0.05,
-                label="Top-p (nucleus sampling)",
+                label="Top-p (nucleus)",
             )
 
-            generate_btn = gr.Button(
-                "Generate",
-                variant="primary",
-                interactive=True,
-            )
-
-        # ── Right column: output + status ───────────────────
-        with gr.Column(scale=2):
-            output_box = gr.Textbox(
-                label="Output",
-                interactive=False,
-                lines=22,
-                max_lines=40,
-                show_copy_button=True,
-            )
-
+            # -- System status ------------------------------------------
+            gr.Markdown("---")
             gr.Markdown("#### System Status")
-            status_box = gr.Textbox(
-                label="System Status",
-                interactive=False,
-                lines=7,
-                max_lines=10,
-                value="No model loaded.",
+            status_box = gr.Markdown(value=_status_md())
+            refresh_btn = gr.Button("Refresh Status", size="sm")
+
+        # ================================================================
+        # RIGHT PANEL – chat area
+        # ================================================================
+        with gr.Column(scale=2, min_width=480):
+            chatbot = gr.Chatbot(
+                value=[],
+                height=520,
+                label="Conversation",
+                render_markdown=True,
             )
 
-            refresh_btn = gr.Button("Refresh Status", size="sm")
+            prompt_input = gr.Textbox(
+                label="Prompt",
+                placeholder="Type your message and press Enter or click Generate …",
+                lines=3,
+                max_lines=8,
+            )
+
+            with gr.Row():
+                generate_btn = gr.Button("Generate", variant="primary", scale=3)
+                stop_btn = gr.Button("Stop", variant="stop", scale=1, interactive=False)
+                clear_btn = gr.Button("Clear Chat", variant="secondary", scale=1)
+
+    # Hidden state: whether generation is running (for button interactivity)
+    is_generating = gr.State(False)
 
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
     def _on_model_change(label: str):
-        """When the dropdown changes, update the info panel and defaults."""
+        """Dropdown change → update info card + slider defaults."""
         spec = spec_from_label(label)
         info = _spec_info_md(spec)
-        defaults = {}
         if spec:
-            defaults = {
-                max_tokens: gr.update(value=spec.default_max_tokens),
-                temperature: gr.update(value=spec.default_temperature),
-                top_p: gr.update(value=spec.default_top_p),
-            }
-        return info, defaults.get(max_tokens, gr.update()), defaults.get(temperature, gr.update()), defaults.get(top_p, gr.update())
+            return (
+                info,
+                gr.update(value=spec.default_max_tokens),
+                gr.update(value=spec.default_temperature),
+                gr.update(value=spec.default_top_p),
+            )
+        return info, gr.update(), gr.update(), gr.update()
 
     model_dd.change(
         fn=_on_model_change,
@@ -201,25 +213,18 @@ def create_deepseek_tab() -> None:
         outputs=[model_info, max_tokens, temperature, top_p],
     )
 
+    # -- Load / Unload --------------------------------------------------
+
     def _load_model(label: str, progress=gr.Progress(track_tqdm=True)):
-        """Load the selected model."""
         spec = spec_from_label(label)
         if spec is None:
             return "Error: unknown model selection.", _status_md()
-
         mgr = get_manager()
-        messages = []
-
-        def _cb(msg: str):
-            messages.append(msg)
-
         try:
-            result = mgr.load(spec, progress_cb=_cb)
+            result = mgr.load(spec, progress_cb=lambda m: None)
             return result, _status_md()
-        except RuntimeError as e:
-            return f"FAILED: {e}", _status_md()
         except Exception as e:
-            logger.exception("Unexpected error loading model")
+            logger.exception("Error loading model")
             return f"FAILED: {e}\n{traceback.format_exc()}", _status_md()
 
     load_btn.click(
@@ -233,22 +238,38 @@ def create_deepseek_tab() -> None:
         mgr.unload()
         return "Model unloaded.", _status_md()
 
-    unload_btn.click(
-        fn=_unload,
-        inputs=[],
-        outputs=[load_status, status_box],
-    )
+    unload_btn.click(fn=_unload, inputs=[], outputs=[load_status, status_box])
 
-    def _generate(prompt: str, tokens: int, temp: float, tp: float):
-        """Run inference with streaming output."""
+    # -- Generate (streaming) -------------------------------------------
+
+    def _generate(
+        prompt: str,
+        history: list,
+        tokens: int,
+        temp: float,
+        tp: float,
+    ):
+        """Yield updated chat history as tokens stream in."""
         if not prompt or not prompt.strip():
-            yield "Error: please enter a prompt."
+            yield history, "", gr.update(interactive=False), gr.update(interactive=False), _status_md()
             return
 
         mgr = get_manager()
         if not mgr.is_loaded:
-            yield "Error: no model loaded. Click 'Load Model' first."
+            # Append an error message from assistant
+            history = history + [
+                gr.ChatMessage(role="user", content=prompt.strip()),
+                gr.ChatMessage(role="assistant", content="Error: no model loaded. Click **Load Model** first."),
+            ]
+            yield history, "", gr.update(interactive=True), gr.update(interactive=False), _status_md()
             return
+
+        # Append user message
+        history = history + [gr.ChatMessage(role="user", content=prompt.strip())]
+        # Placeholder for assistant
+        history = history + [gr.ChatMessage(role="assistant", content="")]
+        # Enable Stop, disable Generate while running
+        yield history, "", gr.update(interactive=False), gr.update(interactive=True), _status_md()
 
         try:
             for partial in mgr.generate(
@@ -258,16 +279,63 @@ def create_deepseek_tab() -> None:
                 top_p=tp,
                 stream=True,
             ):
-                yield partial
+                # Update the last assistant message in-place
+                history[-1] = gr.ChatMessage(role="assistant", content=partial)
+                yield history, "", gr.update(interactive=False), gr.update(interactive=True), _status_md()
+
+            # If stopped early, append a note
+            if mgr._stop_event.is_set():
+                current = history[-1].content if hasattr(history[-1], "content") else str(history[-1])
+                history[-1] = gr.ChatMessage(
+                    role="assistant",
+                    content=current + "\n\n_(generation stopped by user)_",
+                )
         except Exception as e:
             logger.exception("Generation error")
-            yield f"ERROR: {e}\n{traceback.format_exc()}"
+            history[-1] = gr.ChatMessage(
+                role="assistant",
+                content=f"ERROR: {e}\n```\n{traceback.format_exc()}\n```",
+            )
 
-    generate_btn.click(
+        # Re-enable Generate, disable Stop
+        yield history, "", gr.update(interactive=True), gr.update(interactive=False), _status_md()
+
+    gen_click_event = generate_btn.click(
         fn=_generate,
-        inputs=[prompt_input, max_tokens, temperature, top_p],
-        outputs=[output_box],
+        inputs=[prompt_input, chatbot, max_tokens, temperature, top_p],
+        outputs=[chatbot, prompt_input, generate_btn, stop_btn, status_box],
     )
+
+    # Submit on Enter as well
+    gen_submit_event = prompt_input.submit(
+        fn=_generate,
+        inputs=[prompt_input, chatbot, max_tokens, temperature, top_p],
+        outputs=[chatbot, prompt_input, generate_btn, stop_btn, status_box],
+    )
+
+    # -- Stop Generation -------------------------------------------------
+
+    def _stop():
+        """Signal the backend to stop after the current token."""
+        if _BACKEND_AVAILABLE:
+            get_manager().request_stop()
+        return gr.update(interactive=True), gr.update(interactive=False)
+
+    stop_btn.click(
+        fn=_stop,
+        inputs=[],
+        outputs=[generate_btn, stop_btn],
+        cancels=[gen_click_event, gen_submit_event],
+    )
+
+    # -- Clear Chat ------------------------------------------------------
+
+    def _clear_chat():
+        return [], _status_md()
+
+    clear_btn.click(fn=_clear_chat, inputs=[], outputs=[chatbot, status_box])
+
+    # -- Refresh Status --------------------------------------------------
 
     def _refresh():
         return _status_md()
