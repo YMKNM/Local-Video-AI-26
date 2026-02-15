@@ -150,7 +150,7 @@ class DiffusersPipeline:
                 )
 
             self._report(2, 4, "Enabling CPU offload...")
-            # LTX-2 with quanto INT8: use group offloading (leaf-level).
+            # LTX-2 with quanto INT8: use group offloading (block-level).
             #
             # WHY NOT enable_sequential_cpu_offload()?
             #   accelerate's AlignDevicesHook calls
@@ -164,26 +164,39 @@ class DiffusersPipeline:
             #   transformer (~18 GB) and text_encoder (~23 GB) each exceed
             #   16 GB VRAM.
             #
-            # GROUP OFFLOADING (leaf_level, use_stream=False):
-            #   Uses diffusers' own hooks that transfer via .to(device) —
-            #   no meta-tensor reconstruction, fully compatible with quanto.
-            #   Each leaf module (~one Linear layer, ~100-200 MB INT8) fits
-            #   easily in 16 GB VRAM.  use_stream=False is mandatory because
-            #   the stream path calls param.data.cpu().pin_memory() which
-            #   strips the quanto WeightQBytesTensor wrapper.
+            # WHY NOT leaf_level group offloading?
+            #   Leaf-level hooks manage individual Linear/Conv layers but
+            #   quanto INT8 WeightQBytesTensor wrappers can lose device
+            #   coherence during the per-leaf onload/offload cycle, causing
+            #   "mat2 is on cpu" errors in matrix multiplies.
+            #
+            # BLOCK-LEVEL GROUP OFFLOADING (num_blocks_per_group=1):
+            #   Moves entire transformer blocks (nn.ModuleList entries) to
+            #   GPU as a unit — all params (Linear, LayerNorm, etc.) within
+            #   a block are on the same device at all times.  Each LTX-2
+            #   transformer block is ~400 MB INT8, easily fits in 16 GB.
+            #   use_stream=False avoids pin_memory() stripping the quanto
+            #   WeightQBytesTensor wrapper.
+            #
+            #   Small components (VAE, connectors, audio_vae, vocoder) are
+            #   excluded from offloading and kept permanently on GPU
+            #   (~5.2 GB total), leaving plenty of headroom for one block
+            #   at a time.
             if spec.family == "ltx2":
                 self._pipe.enable_group_offload(
                     onload_device=torch.device(self.device),
                     offload_device=torch.device("cpu"),
-                    offload_type="leaf_level",
+                    offload_type="block_level",
+                    num_blocks_per_group=1,
                     use_stream=False,
+                    exclude_modules=["vae", "audio_vae", "vocoder", "connectors"],
                 )
                 # VAE tiling: official LTX-2 docs recommend this to avoid
                 # OOM during VAE decoding (121 frames × 512×768 is heavy).
                 if hasattr(self._pipe, 'vae') and hasattr(self._pipe.vae, 'enable_tiling'):
                     self._pipe.vae.enable_tiling()
                     logger.info("Enabled VAE tiling for LTX-2")
-                logger.info("Using group offload (leaf-level) for LTX-2 (quanto INT8)")
+                logger.info("Using group offload (block-level) for LTX-2 (quanto INT8)")
             else:
                 self._pipe.enable_model_cpu_offload()
         else:
