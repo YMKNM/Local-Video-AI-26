@@ -253,9 +253,9 @@ _register(ModelSpec(
 
 # ── 5. LTX-2 19B (audio-video DiT, requires diffusers main) ──────
 # This is a 47B-total-parameter model (19B transformer + 27B Gemma3 text
-# encoder).  The diffusers format weighs ~150 GB on disk.  BF16 loading
-# requires ≥90 GB system RAM.  Even aggressive NF4 quantization (~26 GB)
-# barely fits 32 GB RAM and produces degraded quality.
+# encoder).  The diffusers format weighs ~135 GB on disk.  BF16 loading
+# requires ≥96 GB system RAM.  quanto INT8 quantisation (~46 GB) fits
+# comfortably in 64 GB RAM without swap and preserves high quality.
 # Requires: diffusers ≥0.37.0 (or install from source / "main" branch)
 _register(ModelSpec(
     id="ltx-2-19b",
@@ -263,10 +263,10 @@ _register(ModelSpec(
     family="ltx2",
     version="1.0",
     parameters="19B",
-    description="DiT audio-video foundation model. 768p 24fps. Auto-NF4 on <64 GB RAM.",
+    description="DiT audio-video foundation model. 768p 24fps. Auto-INT8 on <96 GB RAM.",
     repo_id="Lightricks/LTX-2",
     local_subdir="ltx-2-19b",
-    disk_gb=95,                # diffusers-format download (~38 GB transformer + ~50 GB text encoder + extras)
+    disk_gb=135,               # diffusers-format download (~35 GB transformer + ~93 GB text encoder + extras)
     pipeline_cls="LTX2Pipeline",
     dtype=torch.bfloat16,
     scheduler_cls="",          # uses built-in FlowMatchEulerDiscreteScheduler
@@ -279,7 +279,7 @@ _register(ModelSpec(
     native_fps=24,
     vram_base_gb=5.0,          # sequential CPU offload keeps VRAM low (~3-5 GB)
     vram_per_pixel_frame=1.2e-7,
-    min_ram_gb=28.0,           # NF4 quantised: ~25 GB total in RAM
+    min_ram_gb=32.0,           # INT8 quantised: ~46 GB total in RAM (works with 32 GB + swap)
     min_diffusers_version="main",
     license="ltx-2-community-license-agreement",
     source_url="https://huggingface.co/Lightricks/LTX-2",
@@ -287,7 +287,7 @@ _register(ModelSpec(
     quality_tier="high",
     notes=(
         "47B total params (19B transformer + 27B Gemma3 text encoder). "
-        "~95 GB disk. Uses NF4 quantisation on ≤64 GB RAM systems. "
+        "~135 GB disk. Uses quanto INT8 quantisation on <96 GB RAM systems. "
         "Requires diffusers from source (LTX2Pipeline). "
         "Output includes synchronised audio. 24 fps."
     ),

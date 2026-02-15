@@ -1,5 +1,5 @@
 # Hardware Configuration for Video AI Enterprise Platform
-# Optimized for NVIDIA RTX 5080 + 32GB DDR5
+# Optimized for NVIDIA RTX 5080 + 64GB DDR5
 
 # =============================================================================
 # GPU Configuration - NVIDIA GeForce RTX 5080 (16GB VRAM)
@@ -47,13 +47,13 @@ cpu:
   avx2: true
   
 # =============================================================================
-# System Memory - 32GB DDR4
+# System Memory - 64GB DDR5
 # =============================================================================
 system:
-  ram_total_gb: 32
+  ram_total_gb: 64
   min_ram_gb: 16
-  recommended_ram_gb: 32
-  model_cache_gb: 8
+  recommended_ram_gb: 64
+  model_cache_gb: 16
   swap_usage: "minimal"  # minimal, moderate, aggressive
 
 # =============================================================================

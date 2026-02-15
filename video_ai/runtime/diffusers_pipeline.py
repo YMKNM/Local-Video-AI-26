@@ -407,8 +407,8 @@ class DiffusersPipeline:
         Uses **quanto INT8** for the transformer and text_encoder:
           - 2× better precision than NF4 → much better prompt adherence
             and temporal coherence.
-          - Compatible with sequential CPU offload (plain int8 tensors).
-          - Total model ~46 GB: exceeds 34 GB RAM but fits with OS swap.
+          - Compatible with group offloading (plain int8 tensors).
+          - Total model ~46 GB INT8: fits in 64 GB RAM without swap.
 
         CRITICAL NOTES:
         - Only quantise transformer + text_encoder.  The VAE, connectors,
@@ -425,7 +425,7 @@ class DiffusersPipeline:
         ram_gb = psutil.virtual_memory().total / (1024 ** 3)
         kwargs: dict = {"torch_dtype": spec.dtype}
 
-        if ram_gb < 64:
+        if ram_gb < 96:
             try:
                 from diffusers import (
                     QuantoConfig as DiffusersQuantoConfig,
@@ -450,10 +450,11 @@ class DiffusersPipeline:
                     }
                 )
                 kwargs["quantization_config"] = quant_cfg
+                swap_note = "swap will be used" if ram_gb < 48 else "fits in RAM"
                 logger.info(
                     f"LTX-2: system RAM {ram_gb:.0f} GB — "
                     f"quanto INT8 for transformer + text_encoder "
-                    f"(~46 GB total, swap will be used)"
+                    f"(~46 GB total, {swap_note})"
                 )
             except ImportError:
                 logger.warning(
@@ -464,7 +465,7 @@ class DiffusersPipeline:
             except Exception as e:
                 logger.warning(f"INT8 quantisation setup failed: {e}")
         else:
-            logger.info(f"LTX-2: {ram_gb:.0f} GB RAM available — loading BF16")
+            logger.info(f"LTX-2: {ram_gb:.0f} GB RAM available — loading full BF16 (no quantisation)")
 
         return kwargs
 

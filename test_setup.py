@@ -222,22 +222,22 @@ def test_model_registry():
     assert ltx2 is not None, "LTX-2 not found"
     assert ltx2.family == "ltx2"
     assert ltx2.pipeline_cls == "LTX2Pipeline"
-    assert ltx2.min_ram_gb == 28.0
+    assert ltx2.min_ram_gb == 32.0
     assert ltx2.min_diffusers_version == "main"
     assert ltx2.default_num_frames == 121
     assert ltx2.native_fps == 24
     assert "text-to-audio" in ltx2.modalities
     print("  [OK] LTX-2 19B fields correct")
 
-    # 3. LTX-2 INCOMPATIBLE on 24 GB RAM (below 28 GB min)
+    # 3. LTX-2 INCOMPATIBLE on 24 GB RAM (below 32 GB min)
     compat = ltx2.check_compatibility(vram_gb=16.0, disk_free_gb=500.0, ram_gb=24.0)
     assert compat == Compatibility.INCOMPATIBLE, f"Expected INCOMPATIBLE on 24 GB, got {compat}"
     print("  [OK] LTX-2 INCOMPATIBLE on 24 GB RAM")
 
-    # 4. LTX-2 not INCOMPATIBLE on 32 GB RAM (passes RAM gate with NF4)
+    # 4. LTX-2 not INCOMPATIBLE on 32 GB RAM (passes RAM gate with INT8)
     compat_32 = ltx2.check_compatibility(vram_gb=16.0, disk_free_gb=500.0, ram_gb=32.0)
     assert compat_32 != Compatibility.INCOMPATIBLE, f"Expected not INCOMPATIBLE on 32 GB, got {compat_32}"
-    print("  [OK] LTX-2 passes RAM gate on 32 GB (NF4)")
+    print("  [OK] LTX-2 passes RAM gate on 32 GB (INT8)")
 
     # 5. LTX-2 not INCOMPATIBLE on 128 GB RAM
     compat_big = ltx2.check_compatibility(vram_gb=16.0, disk_free_gb=500.0, ram_gb=128.0)
@@ -257,11 +257,11 @@ def test_model_registry():
     assert has_warning, "Should have ⚠️ prefix for incompatible models"
     print("  [OK] dropdown_choices(include_all) shows all 5 with warnings")
 
-    # 8. dropdown_choices default shows LTX-2 (since min_ram=28 < our 32 GB)
-    default_labels = dropdown_choices(vram_gb=16.0, disk_free_gb=500.0, ram_gb=32.0)
+    # 8. dropdown_choices default shows LTX-2 (since min_ram=32 ≤ our 64 GB)
+    default_labels = dropdown_choices(vram_gb=16.0, disk_free_gb=500.0, ram_gb=64.0)
     ltx2_in_default = any("LTX-2 19B" in lbl for lbl in default_labels)
-    assert ltx2_in_default, "LTX-2 should appear in default dropdown on 32 GB RAM"
-    print("  [OK] LTX-2 appears in default dropdown on 32 GB RAM")
+    assert ltx2_in_default, "LTX-2 should appear in default dropdown on 64 GB RAM"
+    print("  [OK] LTX-2 appears in default dropdown on 64 GB RAM")
 
     # 9. Snap frames works for LTX-2 (8k+1 rule)
     assert ltx2.snap_frames(100) == 97   # (100-1)//8 * 8 + 1 = 97

@@ -48,7 +48,7 @@ A production-grade, scalable AI video generation platform optimized for NVIDIA R
 |-----------|---------|-------------|---------|
 | **GPU** | RTX 3060 (12GB) | RTX 3080 (10GB) | RTX 4090 (24GB) |
 | **CPU** | 6-core (i5-10400) | 6-core (i5-12400) | 8+ core |
-| **RAM** | 16 GB | 32 GB DDR4 | 64 GB |
+| **RAM** | 16 GB | 64 GB DDR5 | 128 GB |
 | **Storage** | 100 GB SSD | 500 GB NVMe | 1 TB NVMe |
 
 ### Software

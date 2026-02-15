@@ -8,10 +8,12 @@
 | **CogVideoX 2B** | 2B | 720×480 | 8 | 6.1 sec (49 frames) | ~8 GB | 11 GB | Apache-2.0 |
 | **CogVideoX 5B** | 5B | 720×480 | 8 | 6.1 sec (49 frames) | ~10 GB | 20 GB | CogVideoX (custom) |
 | **LTX-Video 2B** | 2B | 768×512 | 24 | ~10.7 sec (257 frames) | ~11 GB | 27 GB | LTX-Video Open |
+| **LTX-2 19B** | 19B+27B | 768×512 | 24 | ~10.0 sec (241 frames) | ~5 GB† | 135 GB | LTX-2 Community |
 
 ### RTX 5080 (16 GB VRAM) Compatibility
 
-All four models are **compatible** with the RTX 5080 at default settings using CPU offload.
+All four smaller models are **compatible** with the RTX 5080 at default settings using CPU offload.
+LTX-2 19B uses leaf-level group offloading with quanto INT8 quantization (†VRAM shown is per-layer peak).
 
 ### Download & Load Test Status
 
@@ -171,9 +173,9 @@ ModelSpec(
 - **CUDA**: 11.8+
 
 ### Recommended (RTX 5080)
-- **GPU**: 16 GB VRAM — runs all 4 models comfortably with CPU offload
-- **RAM**: 32 GB for smooth model loading
-- **Disk**: 60+ GB for multiple models
+- **GPU**: 16 GB VRAM — runs all models with CPU offload / group offloading
+- **RAM**: 64 GB for smooth model loading (LTX-2 19B INT8 uses ~46 GB)
+- **Disk**: 150+ GB for all models including LTX-2
 - **CUDA**: 12.8
 
 ### VRAM-Constrained Tips
