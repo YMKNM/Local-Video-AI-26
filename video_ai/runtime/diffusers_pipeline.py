@@ -25,6 +25,76 @@ from .model_registry import MODEL_REGISTRY, ModelSpec, get_model
 
 logger = logging.getLogger(__name__)
 
+
+# ── quanto + group-offload compatibility patch ─────────────────
+#
+# Root cause (confirmed empirically):
+#   diffusers' group offloading moves parameters between CPU and GPU using
+#       param.data = param.data.to(device)
+#   For quanto INT8 WeightQBytesTensor (a torch wrapper-subclass), the
+#   C-level `.data` setter replaces the parameter's outer storage pointer
+#   but does NOT transfer the internal `._data` (int8) and `._scale`
+#   (bf16) components.  The parameter *appears* to be on CUDA but the
+#   weight matrix read by mm is still on CPU → "mat2 is on cpu" error.
+#
+# Fix:
+#   Use `module.to(device)` instead, which goes through `Module._apply()`
+#   and — with the __future__ flag — creates brand-new Parameter objects
+#   that properly wrap the moved quanto tensor.  Confirmed working across
+#   repeated onload/offload cycles.
+# ────────────────────────────────────────────────────────────────
+
+_QUANTO_PATCH_APPLIED = False
+
+
+def _patch_group_offload_for_quanto():
+    """Monkey-patch diffusers ModuleGroup so device transfers work with quanto."""
+    global _QUANTO_PATCH_APPLIED
+    if _QUANTO_PATCH_APPLIED:
+        return
+
+    from diffusers.hooks.group_offloading import ModuleGroup
+
+    _orig_onload = ModuleGroup._onload_from_memory
+    _orig_offload = ModuleGroup._offload_to_memory
+
+    def _quanto_safe_onload(self):
+        """Onload via module.to() — keeps quanto INT8 wrappers intact."""
+        old = torch.__future__.get_overwrite_module_params_on_conversion()
+        torch.__future__.set_overwrite_module_params_on_conversion(True)
+        try:
+            for m in self.modules:
+                m.to(self.onload_device, non_blocking=False)
+            # Standalone params/buffers (e.g. scale_shift_table) are plain
+            # tensors — param.data assignment is fine for those.
+            for p in self.parameters:
+                p.data = p.data.to(self.onload_device, non_blocking=False)
+            for b in self.buffers:
+                b.data = b.data.to(self.onload_device, non_blocking=False)
+        finally:
+            torch.__future__.set_overwrite_module_params_on_conversion(old)
+
+    def _quanto_safe_offload(self):
+        """Offload via module.to() with __future__ flag for quanto compat."""
+        if self.stream is not None:
+            return _orig_offload(self)          # stream path unchanged
+        old = torch.__future__.get_overwrite_module_params_on_conversion()
+        torch.__future__.set_overwrite_module_params_on_conversion(True)
+        try:
+            for m in self.modules:
+                m.to(self.offload_device, non_blocking=False)
+            for p in self.parameters:
+                p.data = p.data.to(self.offload_device, non_blocking=False)
+            for b in self.buffers:
+                b.data = b.data.to(self.offload_device, non_blocking=False)
+        finally:
+            torch.__future__.set_overwrite_module_params_on_conversion(old)
+
+    ModuleGroup._onload_from_memory = _quanto_safe_onload
+    ModuleGroup._offload_to_memory = _quanto_safe_offload
+    _QUANTO_PATCH_APPLIED = True
+    logger.info("Patched group offloading for quanto INT8 compatibility")
+
 # Keep legacy constant for backwards-compat
 DEFAULT_MODEL = "wan2.1-t2v-1.3b"
 # Re-export DIFFUSERS_MODELS as a thin wrapper so old callers work
@@ -150,7 +220,8 @@ class DiffusersPipeline:
                 )
 
             self._report(2, 4, "Enabling CPU offload...")
-            # LTX-2 with quanto INT8: use group offloading (block-level).
+            # LTX-2 with quanto INT8: use group offloading (block-level)
+            # with our monkey-patch to fix the param.data assignment bug.
             #
             # WHY NOT enable_sequential_cpu_offload()?
             #   accelerate's AlignDevicesHook calls
@@ -164,25 +235,23 @@ class DiffusersPipeline:
             #   transformer (~18 GB) and text_encoder (~23 GB) each exceed
             #   16 GB VRAM.
             #
-            # WHY NOT leaf_level group offloading?
-            #   Leaf-level hooks manage individual Linear/Conv layers but
-            #   quanto INT8 WeightQBytesTensor wrappers can lose device
-            #   coherence during the per-leaf onload/offload cycle, causing
-            #   "mat2 is on cpu" errors in matrix multiplies.
+            # WHY does vanilla group offloading fail with quanto INT8?
+            #   The onload path does  param.data = param.data.to(device)
+            #   For quanto WeightQBytesTensor (a torch wrapper-subclass),
+            #   the C-level .data setter replaces the outer storage pointer
+            #   but leaves the internal ._data (int8) and ._scale (bf16)
+            #   on the OLD device → "mat2 is on cpu" error.
+            #   _patch_group_offload_for_quanto() fixes this by using
+            #   module.to(device) which goes through Module._apply() to
+            #   create proper new Parameters wrapping the moved tensors.
             #
-            # BLOCK-LEVEL GROUP OFFLOADING (num_blocks_per_group=1):
-            #   Moves entire transformer blocks (nn.ModuleList entries) to
-            #   GPU as a unit — all params (Linear, LayerNorm, etc.) within
-            #   a block are on the same device at all times.  Each LTX-2
-            #   transformer block is ~400 MB INT8, easily fits in 16 GB.
-            #   use_stream=False avoids pin_memory() stripping the quanto
-            #   WeightQBytesTensor wrapper.
-            #
-            #   Small components (VAE, connectors, audio_vae, vocoder) are
-            #   excluded from offloading and kept permanently on GPU
-            #   (~5.2 GB total), leaving plenty of headroom for one block
-            #   at a time.
+            # BLOCK-LEVEL (num_blocks_per_group=1):
+            #   Each LTX-2 transformer block is ~400 MB INT8 — fits
+            #   easily in 16 GB VRAM.  Small components (VAE, connectors,
+            #   audio_vae, vocoder ~5.2 GB total) are excluded from
+            #   offloading and kept permanently on GPU.
             if spec.family == "ltx2":
+                _patch_group_offload_for_quanto()
                 self._pipe.enable_group_offload(
                     onload_device=torch.device(self.device),
                     offload_device=torch.device("cpu"),
@@ -196,7 +265,7 @@ class DiffusersPipeline:
                 if hasattr(self._pipe, 'vae') and hasattr(self._pipe.vae, 'enable_tiling'):
                     self._pipe.vae.enable_tiling()
                     logger.info("Enabled VAE tiling for LTX-2")
-                logger.info("Using group offload (block-level) for LTX-2 (quanto INT8)")
+                logger.info("Using group offload (block-level, quanto-patched) for LTX-2")
             else:
                 self._pipe.enable_model_cpu_offload()
         else:

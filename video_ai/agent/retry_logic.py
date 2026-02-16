@@ -334,9 +334,11 @@ class RetryManager:
                 error_type = self.classify_error(e)
                 error_msg = str(e)
                 
+                import traceback
                 logger.warning(
                     f"Attempt {attempt} failed with {error_type.name}: {error_msg}"
                 )
+                logger.debug(f"Full traceback:\n{traceback.format_exc()}")
                 
                 attempt_record = RetryAttempt(
                     attempt_number=attempt,
