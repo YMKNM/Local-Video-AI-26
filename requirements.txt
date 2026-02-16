@@ -1,32 +1,31 @@
 # =============================================================================
 # Video AI Platform - Requirements
 # =============================================================================
-# Hardware: NVIDIA GeForce RTX 5080 (16GB VRAM) + 32GB DDR4
+# Hardware: NVIDIA GeForce RTX 5080 (16GB VRAM) + 68GB DDR5
 # PyTorch: Install separately via:
 #   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# diffusers: Install from source for LTX-2 support:
+#   pip install git+https://github.com/huggingface/diffusers.git
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Core Framework (torch installed separately - see above)
 # -----------------------------------------------------------------------------
-torchvision>=0.16.0
-torchaudio>=2.1.0
+torchvision>=0.20.0
+torchaudio>=2.6.0
 
 # -----------------------------------------------------------------------------
-# Diffusion & Generation Models
+# Diffusion & Generation Models (diffusers installed from source - see above)
 # -----------------------------------------------------------------------------
-diffusers>=0.24.0
-transformers>=4.36.0
-accelerate>=0.25.0
+transformers>=4.38.0
+accelerate>=0.27.0
 safetensors>=0.4.0
-huggingface-hub>=0.19.0
+huggingface-hub>=0.21.0
 
 # -----------------------------------------------------------------------------
 # Video Processing
 # -----------------------------------------------------------------------------
-ffmpeg-python>=0.2.0
 opencv-python>=4.8.0
-imageio>=2.33.0
 imageio-ffmpeg>=0.4.9
 Pillow>=10.1.0
 numpy>=1.24.0
@@ -39,33 +38,21 @@ uvicorn[standard]>=0.24.0
 websockets>=12.0
 pydantic>=2.5.0
 python-multipart>=0.0.6
-aiofiles>=23.2.0
 httpx>=0.25.0
 
 # -----------------------------------------------------------------------------
-# Audio / Signal Processing
+# Quantisation (INT8 via quanto for LTX-2 on <96 GB RAM)
 # -----------------------------------------------------------------------------
-scipy>=1.11.0
-soundfile>=0.12.0
-
-# -----------------------------------------------------------------------------
-# Quantisation (INT8 via quanto for LTX-2 on <64 GB RAM)
-# -----------------------------------------------------------------------------
-optimum-quanto>=0.2.6
+optimum-quanto>=0.2.6,<0.4.0
 
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
 pyyaml>=6.0
-python-dotenv>=1.0.0
 
 # -----------------------------------------------------------------------------
 # Utilities
 # -----------------------------------------------------------------------------
-tqdm>=4.66.0
-colorama>=0.4.6
-click>=8.1.0
-rich>=13.7.0
 psutil>=5.9.0
 
 # -----------------------------------------------------------------------------
@@ -74,7 +61,14 @@ psutil>=5.9.0
 gradio>=4.8.0
 
 # -----------------------------------------------------------------------------
-# Development & Testing (uncomment as needed)
+# Optional — uncomment if using specific features
+# -----------------------------------------------------------------------------
+# onnxruntime-gpu>=1.17.0     # Legacy ONNX pipeline (not needed for diffusers path)
+# bitsandbytes>=0.41.0        # NF4 quantisation for DeepSeek models
+# segment-anything>=1.0       # SAM segmentation for image-to-video
+
+# -----------------------------------------------------------------------------
+# Development & Testing
 # -----------------------------------------------------------------------------
 # pytest>=7.4.0
 # pytest-asyncio>=0.21.0

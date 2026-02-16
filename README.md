@@ -1,622 +1,390 @@
-# 🎬 Video AI Platform
+# Local Video AI
 
-**Enterprise-Ready AI Video Generation for NVIDIA GPUs**
+**Fully offline, local AI video generation for NVIDIA CUDA GPUs on Windows.**
 
-A production-grade, scalable AI video generation platform optimized for NVIDIA RTX GPUs using CUDA and TensorRT acceleration. Features REST/WebSocket APIs, Docker/Kubernetes deployment, and comprehensive SDKs.
-
-![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
-![GPU](https://img.shields.io/badge/GPU-NVIDIA%20CUDA-76b900.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+Generate videos from text prompts using state-of-the-art diffusion models — no cloud, no API keys, no internet required after initial model download. Runs entirely on consumer hardware with an RTX 5080 or similar.
 
 ---
 
-## ✨ Features
+## Features
 
-### Core Capabilities
-- 🎬 **Text-to-Video Generation**: Generate high-quality videos up to 4K@60fps
-- 🖼️ **Image-to-Video**: Animate still images with motion control
-- 🎵 **Audio Synchronization**: Integrated AudioLDM2/MusicGen support
-- 🔄 **Long-form Video**: 10+ second clips with temporal consistency
-
-### State-of-the-Art Models
-- 📦 **LTX-Video-2**: 5B parameter, 4K support, 257 frames
-- 🎭 **HunyuanVideo**: 13B parameter flagship model
-- 🔥 **Genmo Mochi**: 10B parameter with text-motion alignment
-- ⚡ **AccVideo**: 1.5B fast preview (8-step inference)
-
-### Enterprise Features
-- 🌐 **REST/WebSocket API**: FastAPI-based microservices architecture
-- 📦 **Python/JavaScript SDKs**: Full automation support
-- 🐳 **Docker/Kubernetes**: Production deployment templates
-- 📊 **GPU Scheduler**: Priority queue with dynamic quantization
-- 🛡️ **Safety Pipeline**: Content filtering, bias detection, watermarking
-- 📋 **Audit Logging**: Compliance-ready provenance tracking
-
-### Performance
-- 🔥 **CUDA/TensorRT Optimized**: Full hardware acceleration
-- 💾 **Smart Memory Management**: Tiled processing for 4K
-- ⚡ **Dynamic Quantization**: FP16/BF16/INT8/NVFP8 support
-- 🔄 **Progressive Preview**: Fast preview during generation
+- **Multi-Model Support** — 5 registered models from 1.3B to 19B parameters, selectable per generation
+- **Gradio Web UI** — Tabbed interface for video generation, aggressive generation, image-to-video, and DeepSeek chat
+- **CLI & Python API** — Generate videos from the command line or integrate into scripts
+- **REST API** — FastAPI server with WebSocket support for programmatic access
+- **INT8 Quantization** — Automatic quanto INT8 quantization for large models (LTX-2 19B) on systems with < 96 GB RAM
+- **Intelligent Prompt Expansion** — Model-family-aware prompt engineering with quality tag injection
+- **VRAM-Aware Planning** — Automatic hardware detection, VRAM estimation, and model compatibility checking
+- **CPU Offloading** — Block-level group offloading keeps VRAM usage under control
+- **Retry Logic** — Automatic OOM recovery with resolution/frame reduction
+- **FFmpeg Video Assembly** — H.264 MP4 output with configurable quality
+- **DeepSeek LLM Chat** — Offline DeepSeek-R1 inference (1.5B/7B/14B) in a dedicated UI tab
+- **Image-to-Video** — SAM2-based image animation pipeline with pose detection and motion estimation
 
 ---
 
-## 📋 System Requirements
+## Supported Models
 
-### Hardware
-| Component | Minimum | Recommended | Optimal |
-|-----------|---------|-------------|---------|
-| **GPU** | RTX 3060 (12GB) | RTX 3080 (10GB) | RTX 4090 (24GB) |
-| **CPU** | 6-core (i5-10400) | 6-core (i5-12400) | 8+ core |
-| **RAM** | 16 GB | 64 GB DDR5 | 128 GB |
-| **Storage** | 100 GB SSD | 500 GB NVMe | 1 TB NVMe |
+| Model | Parameters | Resolution | FPS | Duration | Disk | Quality |
+|-------|-----------|-----------|-----|----------|------|---------|
+| **Wan2.1 T2V 1.3B** (default) | 1.3B | 832×480 | 16 | ~2 s | ~27 GB | Standard |
+| **CogVideoX 2B** | 2B | 720×480 | 8 | 6 s | ~11 GB | Entry |
+| **CogVideoX 5B** | 5B | 720×480 | 8 | 6 s | ~20 GB | Standard |
+| **LTX-Video 2B** | 2B | 768×512 | 24 | ~4 s | ~27 GB | Entry |
+| **LTX-2 19B** | 19B (47B total) | 768×512 | 24 | ~5 s | ~135 GB | High |
 
-### Software
-- **OS**: Windows 11/10 or Ubuntu 22.04+
-- **Drivers**: NVIDIA Driver 525+ with CUDA 11.8+
-- **Python**: 3.10 or later
-- **FFmpeg**: Required for video encoding
-- **Docker**: Optional, for containerized deployment
+All models are downloaded from HuggingFace in diffusers format and stored locally under `models/`.
+
+LTX-2 19B includes a 27B Gemma3 text encoder and supports text-to-video, image-to-video, and text-to-audio with synchronized output.
 
 ---
 
-## 🚀 Quick Start
+## Hardware Requirements
 
-### Step 1: Clone and Setup Environment
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| **GPU** | NVIDIA with 8+ GB VRAM, CUDA support | RTX 5080 (16 GB VRAM) |
+| **System RAM** | 32 GB | 64+ GB (required for LTX-2 19B with INT8) |
+| **Disk** | 50 GB (smallest model) | 500+ GB (all models) |
+| **CUDA** | 12.0+ | 12.8 |
+| **OS** | Windows 10/11 | Windows 11 |
+| **Python** | 3.10+ | 3.11 |
+| **FFmpeg** | Required | Add to PATH |
 
-```powershell
-# Clone the repository
-git clone https://github.com/your-org/video-ai.git
-cd video_ai
+### Current Development Hardware
 
-# Create virtual environment
+- NVIDIA GeForce RTX 5080 — 16 GB VRAM, CUDA 12.8, Compute Capability 12.0 (Blackwell)
+- 68.5 GB DDR5 RAM
+- PyTorch 2.10.0+cu128
+
+---
+
+## Installation
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/YMKNM/Local-Video-AI-26.git
+cd Local-Video-AI-26
+```
+
+### 2. Create a Virtual Environment
+
+```bash
 python -m venv venv
+venv\Scripts\activate
+```
 
-# Activate virtual environment
-.\venv\Scripts\Activate.ps1  # Windows
-# source venv/bin/activate   # Linux
+### 3. Install PyTorch (CUDA 12.8)
 
-# Install PyTorch with CUDA 11.8
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
 
-# Install all dependencies
+### 4. Install diffusers from Source
+
+Required for LTX-2 19B support (`LTX2Pipeline` is not yet in a stable release):
+
+```bash
+pip install git+https://github.com/huggingface/diffusers.git
+```
+
+### 5. Install Dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### Step 2: Install FFmpeg
+### 6. Install FFmpeg
 
-**Windows:**
-```powershell
-# Using winget
-winget install FFmpeg
+Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to your system PATH.
 
-# Or download from https://github.com/BtbN/FFmpeg-Builds/releases
-# Extract to C:\ffmpeg and add to PATH
-```
+### 7. Download Models
 
-**Linux:**
+Models are automatically downloaded from HuggingFace on first use. To pre-download:
+
 ```bash
-sudo apt update && sudo apt install ffmpeg
+python download_models.py
 ```
 
-### Step 3: Download Models
+Or use the HuggingFace CLI:
 
-```powershell
-# Download models (~50GB for all)
-python download_models.py --all
-
-# Or download specific models
-python download_models.py --model ltx-video
+```bash
+huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B-Diffusers --local-dir models/wan2.1-t2v-1.3b
 ```
 
-### Step 4: Verify Installation
+---
 
-```powershell
-# Run the test suite
-python test_setup.py
+## Usage
 
-# Check system info
-python generate.py --info
-```
+### Web UI (Gradio)
 
-### Step 5: Launch the Web UI 🌐
-
-```powershell
-# Start the web interface
+```bash
 python run_ui.py
 ```
 
-The UI will open automatically at **http://localhost:7860**
+Opens at `http://localhost:7860`. Options:
 
----
-
-## 🖥️ Using the Web UI
-
-### Launching the UI
-
-```powershell
-# Basic launch
-python run_ui.py
-
-# Custom port
-python run_ui.py --port 8080
-
-# Create public shareable link
-python run_ui.py --share
-
-# Enable debug logging
-python run_ui.py --debug
+```bash
+python run_ui.py --port 8080          # Custom port
+python run_ui.py --share              # Public Gradio link
+python run_ui.py --debug              # Debug logging
 ```
 
-### UI Features
+**UI Tabs:**
+1. **Video Generation** — Select model, enter prompt, configure resolution/frames/steps/guidance, generate
+2. **Aggressive Generator** — Batch generation with aggressive memory management
+3. **Image-to-Video** — Upload an image, animate it using SAM2-based motion pipeline
+4. **DeepSeek Chat** — Offline LLM chat using DeepSeek-R1-Distill models
 
-| Tab | Description |
-|-----|-------------|
-| **🎥 Generate** | Enter prompts, select models, adjust settings, generate videos |
-| **📋 Logs** | View real-time generation logs for troubleshooting |
-| **💻 System** | Check GPU, RAM, and dependency status |
-| **🔧 Troubleshooting** | Automatic issue detection with solutions |
-| **❓ Help** | Usage guide and tips |
+### Command Line
 
-### Generation Workflow
-
-1. **Enter Prompt**: Describe the video you want (be specific!)
-2. **Select Model**: Choose from available models
-3. **Choose Quality**: Fast (quick), Balanced (default), Quality (best)
-4. **Adjust Settings** (optional): Duration, resolution, FPS, seed
-5. **Click Generate**: Watch progress in real-time
-6. **View Result**: Video plays automatically when complete
-
-### Writing Good Prompts
-
-| ❌ Bad | ✅ Good |
-|--------|---------|
-| "A dog" | "A golden retriever running through a sunny meadow, slow motion, cinematic" |
-| "Water" | "Crystal clear ocean waves crashing on a tropical beach at sunset, aerial view" |
-| "City" | "Neon-lit Tokyo streets at night, rain reflections, cyberpunk style, panning shot" |
-
----
-
-## ⌨️ Command Line Interface
-
-### Basic Commands
-
-```powershell
-# Generate a video
-python generate.py --prompt "A sunset over mountains"
-
-# Specify duration and quality
-python generate.py --prompt "Ocean waves" --seconds 8 --quality high
-
-# Custom resolution
-python generate.py --prompt "City at night" --width 1280 --height 720
-
-# Reproducible generation with seed
-python generate.py --prompt "Forest scene" --seed 42
-
-# Preview prompt expansion without generating
-python generate.py --prompt "Cat playing" --show-prompt --dry-run
-
-# Show system information
-python generate.py --info
+```bash
+python generate.py --prompt "A cinematic drone shot over mountains at sunset"
+python generate.py --prompt "A cat playing" --seconds 4
+python generate.py --prompt "Ocean waves" --width 1280 --height 720 --seed 42
 ```
 
-### All CLI Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--prompt` | Text description of the video | Required |
-| `--seconds` | Video duration in seconds | 6 |
-| `--width` | Frame width in pixels | 854 |
-| `--height` | Frame height in pixels | 480 |
-| `--fps` | Frames per second | 24 |
-| `--quality` | Quality preset (fast/balanced/quality) | balanced |
-| `--steps` | Number of inference steps | 30 |
-| `--guidance` | Guidance scale | 7.5 |
-| `--seed` | Random seed (-1 for random) | -1 |
-| `--output` | Output directory | ./outputs |
-| `--model` | Model to use | ltx-video |
-| `--info` | Show system information | - |
-| `--dry-run` | Plan without executing | - |
-
----
-
-## 🐍 Python API
-
-### Basic Usage
+### Python API
 
 ```python
-from video_ai import VideoAI, generate
+from video_ai import VideoAI
 
-# Quick generation
-result = generate("A beautiful sunset over mountains")
-print(f"Video saved to: {result.output_path}")
-
-# Using VideoAI class
 ai = VideoAI()
-
-# Check system capabilities
-capabilities = ai.get_capabilities()
-print(f"GPU: {capabilities['gpu_name']}")
-print(f"VRAM: {capabilities['vram_total_gb']} GB")
-
-# Generate with options
-result = ai.generate(
-    prompt="A colorful coral reef with tropical fish",
-    duration_seconds=8,
-    quality_preset="balanced",
-    seed=42
-)
+result = ai.generate("A sunset over the ocean")
+print(result.output_path)
 ```
 
-### Python SDK
+### REST API (FastAPI)
+
+```bash
+uvicorn video_ai.api.server:app --host 0.0.0.0 --port 8000
+```
 
 ```python
-from video_ai.sdk import VideoAIClient
+import httpx
 
-# Connect to API server
-client = VideoAIClient(api_url="http://localhost:8000")
-
-# Generate video
-job = await client.generate(
-    prompt="A majestic eagle soaring over mountains",
-    width=1280,
-    height=720,
-    quality_preset="quality"
-)
-
-# Wait for completion with progress callback
-def on_progress(progress, status):
-    print(f"{progress}% - {status}")
-
-result = await client.wait_for_completion(job.job_id, on_progress=on_progress)
-
-# Download result
-await client.download(result.job_id, "eagle_video.mp4")
-```
-
-### JavaScript SDK
-
-```typescript
-import { VideoAIClient } from '@video-ai/sdk';
-
-const client = new VideoAIClient({ apiUrl: 'http://localhost:8000' });
-
-// Generate video
-const job = await client.generate({
-  prompt: 'A sunset over the ocean',
-  qualityPreset: 'balanced'
-});
-
-// Wait with progress
-const result = await client.waitForCompletion(job.jobId, {
-  onProgress: (progress) => console.log(`${progress}%`)
-});
-
-// Download
-await client.download(result.jobId, 'sunset.mp4');
+response = httpx.post("http://localhost:8000/generate", json={
+    "prompt": "A golden retriever running on a beach",
+    "model": "wan2.1-t2v-1.3b"
+})
 ```
 
 ---
 
-## 🌐 REST API
+## Configuration
 
-### Start the API Server
+Configuration files are in `video_ai/configs/`:
 
-```powershell
-# Start API server
-python -m uvicorn api.server:app --host 0.0.0.0 --port 8000
+| File | Purpose |
+|------|---------|
+| `defaults.yaml` | Default generation parameters (steps, guidance, resolution) |
+| `hardware.yaml` | GPU/RAM detection settings, VRAM thresholds, offloading strategy |
+| `models.yaml` | Legacy ONNX model paths (superseded by `model_registry.py`) |
+| `prompt_templates.yaml` | Prompt expansion templates and quality tags |
 
-# With auto-reload for development
-python -m uvicorn api.server:app --reload
-```
-
-### API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/generate` | Start video generation |
-| `GET` | `/jobs/{job_id}` | Get job status |
-| `DELETE` | `/jobs/{job_id}` | Cancel job |
-| `GET` | `/jobs/{job_id}/output` | Download video |
-| `GET` | `/models` | List available models |
-| `GET` | `/status` | System status |
-| `GET` | `/health` | Health check |
-| `WS` | `/ws/{client_id}` | WebSocket for real-time updates |
-
-### Example Request
-
-```bash
-curl -X POST http://localhost:8000/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "A spaceship flying through a nebula",
-    "width": 1280,
-    "height": 720,
-    "duration_seconds": 6,
-    "quality_preset": "balanced"
-  }'
-```
-
----
-
-## 🐳 Docker Deployment
-
-### Quick Start
-
-```bash
-# Build the image
-docker build -t video-ai:latest .
-
-# Run with GPU support
-docker run --gpus all -p 8000:8000 video-ai:latest
-
-# Or use docker-compose
-docker-compose up -d
-```
-
-### Development Mode
-
-```bash
-docker-compose -f docker-compose.dev.yml up
-```
-
----
-
-## ☸️ Kubernetes Deployment
-
-### Using Helm
-
-```bash
-# Add the repo (if hosted)
-helm repo add video-ai https://charts.video-ai.dev
-
-# Install
-helm install video-ai ./deploy/helm/video-ai \
-  --namespace video-ai \
-  --create-namespace \
-  --set api.ingress.hosts[0].host=video-ai.example.com
-```
-
-### Custom Values
+Key runtime settings are in `defaults.yaml`:
 
 ```yaml
-# custom-values.yaml
-api:
-  replicaCount: 2
-  resources:
-    requests:
-      nvidia.com/gpu: 1
-
-persistence:
-  models:
-    size: 200Gi
+generation:
+  steps: 30
+  guidance_scale: 5.0
+  width: 832
+  height: 480
+  fps: 24
+  duration_seconds: 6
 ```
+
+---
+
+## Project Structure
+
+```
+Local-Video-AI-26/
+├── run_ui.py                  # Web UI launcher
+├── generate.py                # CLI entry point
+├── api.py                     # Python API wrapper
+├── download_models.py         # Model downloader
+├── requirements.txt           # Python dependencies
+├── setup.py                   # Package installer
+│
+├── video_ai/                  # Main package
+│   ├── __init__.py            # VideoAI class, lazy imports
+│   │
+│   ├── agent/                 # Planning & orchestration
+│   │   ├── planner.py         # GenerationPlanner — central orchestrator
+│   │   ├── prompt_engine.py   # Model-aware prompt expansion
+│   │   ├── resource_monitor.py# GPU/RAM/disk monitoring
+│   │   ├── retry_logic.py     # OOM recovery with parameter reduction
+│   │   └── temporal_prompt.py # Temporal prompt scheduling (experimental)
+│   │
+│   ├── runtime/               # Model loading & inference
+│   │   ├── model_registry.py  # Canonical model catalog (5 models)
+│   │   ├── diffusers_pipeline.py # HuggingFace Diffusers pipeline wrapper
+│   │   ├── inference.py       # Inference engine (bridges planner → pipeline)
+│   │   ├── cuda_session.py    # CUDA session management
+│   │   └── gpu_scheduler.py   # Multi-job GPU scheduling
+│   │
+│   ├── ui/                    # Web interface
+│   │   ├── web_ui.py          # Gradio UI (4 tabs)
+│   │   ├── deepseek_tab.py    # DeepSeek chat tab
+│   │   ├── image_motion_tab.py# Image-to-video tab
+│   │   ├── aggressive_generator_tab.py # Batch generation tab
+│   │   └── log_handler.py     # UI logging integration
+│   │
+│   ├── video/                 # Video output pipeline
+│   │   ├── assembler.py       # Frame → video assembly
+│   │   ├── ffmpeg_wrapper.py  # FFmpeg process management
+│   │   └── frame_writer.py    # Frame I/O
+│   │
+│   ├── generators/            # Specialized generators
+│   │   ├── aggressive_image.py# Memory-aggressive image generation
+│   │   ├── image_to_motion.py # Image animation generator
+│   │   └── video_models.py    # Extended model definitions
+│   │
+│   ├── image_motion/          # SAM2-based image animation
+│   │   ├── animator.py        # Core animation engine
+│   │   ├── sam2_segment.py    # SAM2 segmentation
+│   │   ├── motion_estimator.py# Optical flow & motion
+│   │   ├── pose_detector.py   # Pose estimation
+│   │   └── ...                # Supporting modules
+│   │
+│   ├── deepseek/              # Offline DeepSeek LLM
+│   │   └── __init__.py        # DeepSeek-R1-Distill (1.5B/7B/14B)
+│   │
+│   ├── api/                   # REST API
+│   │   └── server.py          # FastAPI application
+│   │
+│   ├── sdk/                   # Client SDKs
+│   │   ├── python_client.py   # Python SDK
+│   │   └── javascript/        # JavaScript SDK
+│   │
+│   ├── models/                # Legacy ONNX pipeline modules
+│   │
+│   ├── configs/               # YAML configuration
+│   │   ├── defaults.yaml
+│   │   ├── hardware.yaml
+│   │   ├── models.yaml
+│   │   └── prompt_templates.yaml
+│   │
+│   └── examples/              # Usage examples
+│       ├── basic_generation.py
+│       ├── advanced_generation.py
+│       └── directml_demo.py
+│
+├── models/                    # Downloaded model weights (not in git)
+│   ├── wan2.1-t2v-1.3b/      # ~27 GB
+│   ├── cogvideox-2b/          # ~13 GB
+│   ├── cogvideox-5b/          # ~20 GB
+│   ├── ltx-video-2b/          # ~27 GB
+│   ├── ltx-2-19b/             # ~135 GB
+│   └── ...
+│
+├── outputs/                   # Generated videos (not in git)
+├── docs/                      # Documentation
+└── deploy/                    # Deployment configs
+```
+
+---
+
+## How It Works
+
+1. **Prompt** → `PromptEngine` expands short prompts with model-specific quality tags and cinematic descriptors
+2. **Planning** → `GenerationPlanner` selects model, estimates VRAM, snaps resolution/frames to model constraints
+3. **Loading** → `DiffusersPipeline` loads the HuggingFace pipeline with CPU offloading and optional INT8 quantization
+4. **Inference** → Diffusion model generates frames (latent space → pixel space via VAE)
+5. **Assembly** → `FFmpegWrapper` encodes frames to H.264 MP4
+6. **Retry** → If OOM occurs, `RetryManager` reduces resolution/frames and retries automatically
+
+---
+
+## Troubleshooting
+
+### Out of Memory (OOM)
+
+The retry system automatically reduces resolution and frame count on OOM. To reduce VRAM usage manually:
+
+- Use a smaller model (Wan2.1 1.3B or CogVideoX 2B)
+- Reduce resolution (e.g., 512×320)
+- Reduce frame count
+- Ensure no other GPU-heavy applications are running
+
+### Model Download Issues
+
+Models are large (11–135 GB). If downloads fail:
+
+- Check disk space (`models/` can exceed 400 GB with all models)
+- Use `huggingface-cli download` with `--resume-download` for resumable downloads
+- Set `HF_HOME` environment variable to control cache location
+
+### CUDA / PyTorch Issues
+
+- Verify CUDA: `python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"`
+- RTX 5080 requires PyTorch with CUDA 12.8+ (`cu128`)
+- Install from: `https://download.pytorch.org/whl/cu128`
+
+### diffusers Version
+
+LTX-2 19B requires diffusers installed from source (the `LTX2Pipeline` class). If you get import errors:
 
 ```bash
-helm install video-ai ./deploy/helm/video-ai -f custom-values.yaml
+pip install --upgrade git+https://github.com/huggingface/diffusers.git
 ```
+
+### FFmpeg Not Found
+
+Ensure `ffmpeg` is on your system PATH:
+
+```bash
+ffmpeg -version
+```
+
+If not installed, download from [ffmpeg.org](https://ffmpeg.org/download.html) and add the `bin/` directory to your PATH.
 
 ---
 
-## 📁 Project Structure
+## Development
 
+### Running Tests
+
+```bash
+python -m pytest test_setup.py -v
 ```
-video_ai/
-├── 📂 api/                   # REST/WebSocket API
-│   └── server.py            # FastAPI application
-│
-├── 📂 sdk/                   # Client SDKs
-│   ├── python_sdk.py        # Python client
-│   └── javascript/          # TypeScript/JS client
-│
-├── 📂 agent/                 # AI Agent (orchestration)
-│   ├── planner.py           # Central orchestrator
-│   ├── prompt_engine.py     # Prompt expansion
-│   ├── temporal_prompt.py   # Shot list generator
-│   ├── resource_monitor.py  # GPU/RAM monitoring
-│   └── retry_logic.py       # Fault tolerance
-│
-├── 📂 runtime/               # Execution layer
-│   ├── cuda_session.py      # CUDA/TensorRT setup
-│   ├── gpu_scheduler.py     # Job scheduling
-│   ├── onnx_loader.py       # Model loading
-│   └── inference.py         # Inference engine
-│
-├── 📂 safety/                # Compliance
-│   └── compliance.py        # Filters, watermarking, audit
-│
-├── 📂 models/                # Model definitions
-│   ├── text_encoder.py      # Text encoding
-│   ├── video_diffusion.py   # Diffusion model
-│   ├── vae.py               # Video VAE
-│   └── pipeline.py          # Full pipeline
-│
-├── 📂 video/                 # Video assembly
-│   ├── frame_writer.py      # Frame output
-│   ├── assembler.py         # Video encoding
-│   └── ffmpeg_wrapper.py    # FFmpeg interface
-│
-├── 📂 configs/               # Configuration files
-│   ├── hardware.yaml        # GPU settings (RTX 3080)
-│   ├── models.yaml          # Model configs
-│   └── defaults.yaml        # Default params
-│
-├── 📂 deploy/                # Deployment
-│   ├── helm/                # Kubernetes Helm charts
-│   ├── nginx/               # Nginx config
-│   └── prometheus/          # Monitoring config
-│
-├── 🐳 Dockerfile            # Container image
-├── 🐳 docker-compose.yml    # Multi-container setup
-├── 🎯 run_ui.py             # Launch web UI
-├── 🎯 generate.py           # CLI entry point
-├── 📋 requirements.txt      # Dependencies
-└── 📖 README.md             # This file
-```
+
+### Project Dependencies
+
+Core stack:
+- **PyTorch 2.10+** (CUDA 12.8) — tensor computation and GPU inference
+- **diffusers** (from source) — HuggingFace diffusion model pipelines
+- **transformers** — text encoder models (T5, Gemma3)
+- **optimum-quanto** — INT8 weight quantization
+- **accelerate** — model loading and device management
+- **Gradio** — web UI framework
+- **FastAPI** — REST API server
+- **FFmpeg** — video encoding
 
 ---
 
-## 🔧 Troubleshooting
+## Known Limitations
 
-### Common Issues
-
-#### ❌ "CUDA not available"
-```powershell
-# Install CUDA-enabled PyTorch
-pip uninstall torch torchvision torchaudio
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-```
-
-#### ❌ "TensorRT not found"
-```powershell
-pip install tensorrt>=8.6.0
-```
-
-#### ❌ "FFmpeg not found"
-```powershell
-# Windows
-winget install FFmpeg
-
-# Linux
-sudo apt install ffmpeg
-```
-
-#### ❌ "Out of memory"
-- Use "fast" quality preset
-- Enable quantization: Use INT8 or FP16 mode
-- Reduce resolution: `--width 640 --height 360`
-- Reduce duration: `--seconds 4`
-- Enable tiled processing in hardware.yaml
-
-#### ❌ "Model not found"
-```powershell
-python download_models.py --model ltx-video-2
-```
-
-### Debug Mode
-
-```powershell
-# Enable verbose logging
-LOG_LEVEL=DEBUG python -m uvicorn api.server:app
-```
+- Windows-only (tested on Windows 11)
+- NVIDIA GPUs only (CUDA required — the original DirectML/AMD path is no longer active)
+- LTX-2 19B requires 64+ GB system RAM for INT8 quantization
+- No TensorRT acceleration (planned)
+- Single-GPU only
+- Video length is model-dependent (typically 2–6 seconds per generation)
 
 ---
 
-## 📊 Supported Models
+## License
 
-| Model | Parameters | VRAM | Max Resolution | Quality |
-|-------|------------|------|----------------|---------|
-| LTX-Video-2 | 5B | 8 GB | 4K (3840x2160) | ⭐⭐⭐⭐⭐ |
-| HunyuanVideo | 13B | 16 GB | 1920x1080 | ⭐⭐⭐⭐⭐ |
-| Genmo Mochi | 10B | 12 GB | 1920x1080 | ⭐⭐⭐⭐ |
-| AccVideo | 1.5B | 4 GB | 1280x720 | ⭐⭐⭐ (Fast) |
-| CogVideoX-2B | 2B | 6 GB | 1280x720 | ⭐⭐⭐ |
-| ZeroScope V2 | 1.7B | 4 GB | 576x320 | ⭐⭐ (Fast) |
+This project is for personal/research use. Individual models have their own licenses:
 
----
-
-## ⚙️ Configuration
-
-### Hardware Settings (`configs/hardware.yaml`)
-```yaml
-gpu:
-  device_id: 0
-  name: "NVIDIA GeForce RTX 3080"
-  vram_gb: 10.0
-  compute_capability: "8.6"
-
-cuda:
-  version_minimum: "11.8"
-  cudnn_version: "8.9"
-  tensorrt_enabled: true
-
-memory:
-  vram_buffer_gb: 1.5
-  enable_tiled_processing: true
-```
-
-### Quality Presets (`configs/defaults.yaml`)
-```yaml
-quality_presets:
-  fast:
-    num_inference_steps: 15
-    width: 640
-    height: 360
-  balanced:
-    num_inference_steps: 30
-    width: 1280
-    height: 720
-  quality:
-    num_inference_steps: 50
-    width: 1920
-    height: 1080
-  ultra:
-    num_inference_steps: 75
-    width: 3840
-    height: 2160
-```
-
----
-
-## 🛡️ Safety & Compliance
-
-### Content Filtering
-- Automatic NSFW/violence detection
-- Customizable blocked keyword lists
-- Bias detection and mitigation
-
-### Provenance
-- C2PA-compliant digital watermarking
-- AI-generated content metadata
-- Audit logging for all generations
-
-### Configuration
-```yaml
-# In configs/defaults.yaml
-safety:
-  content_filter:
-    enabled: true
-    threshold: 0.7
-  watermark:
-    enabled: true
-    strength: 0.3
-  audit_logging:
-    enabled: true
-```
-
----
-
-## 🗺️ Roadmap
-
-- [x] CUDA/TensorRT integration
-- [x] REST/WebSocket API
-- [x] Python & JavaScript SDKs
-- [x] Docker/Kubernetes deployment
-- [x] GPU scheduler with quantization
-- [x] Safety/compliance pipeline
-- [x] Temporal prompt generator
-- [ ] Multi-GPU distributed inference
-- [ ] Frame interpolation (RIFE)
-- [ ] Upscaling (Real-ESRGAN)
-- [ ] Audio-visual sync
-- [ ] Multi-shot timeline editing
-
----
-
-## 📄 License
-
-MIT License - See LICENSE file for details.
-
----
-
-## 🤝 Contributing
-
-Contributions welcome! Please open an issue or pull request.
-
----
-
-<p align="center">
-  Made with ❤️ for the AI community<br>
-  Optimized for NVIDIA RTX GPUs
-</p>
+| Model | License |
+|-------|---------|
+| Wan2.1 T2V 1.3B | Apache 2.0 |
+| CogVideoX 2B | Apache 2.0 |
+| CogVideoX 5B | CogVideoX (custom, research-OK) |
+| LTX-Video 2B | LTX-Video Open Weights |
+| LTX-2 19B | LTX-2 Community License |
+| DeepSeek-R1 | DeepSeek License |

@@ -24,10 +24,10 @@ setup(
     name="video-ai",
     version="0.1.0",
     author="Video AI Project",
-    description="Local AI video generation system for AMD GPUs on Windows",
+    description="Local AI video generation system for NVIDIA CUDA GPUs on Windows",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/video-ai",
+    url="https://github.com/YMKNM/Local-Video-AI-26",
     packages=find_packages(),
     include_package_data=True,
     package_data={
@@ -68,5 +68,5 @@ setup(
         "Topic :: Multimedia :: Video",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
-    keywords="video generation, ai, amd, directml, onnx, diffusion",
+    keywords="video generation, ai, nvidia, cuda, diffusers, diffusion, local",
 )

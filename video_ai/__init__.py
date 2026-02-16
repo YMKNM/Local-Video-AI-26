@@ -1,6 +1,6 @@
 """
 Video AI Main Package
-Local AI video generation system for AMD GPUs on Windows
+Local AI video generation system for NVIDIA CUDA GPUs on Windows
 """
 
 __version__ = "0.1.0"
