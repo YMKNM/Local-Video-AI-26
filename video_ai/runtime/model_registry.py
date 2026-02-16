@@ -275,7 +275,7 @@ _register(ModelSpec(
     default_width=768, default_height=512,
     default_num_frames=121, max_num_frames=257,
     frame_rule="8k+1", dim_multiple=32,
-    default_steps=40, default_guidance=4.0,
+    default_steps=40, default_guidance=5.0,
     native_fps=24,
     vram_base_gb=5.0,          # sequential CPU offload keeps VRAM low (~3-5 GB)
     vram_per_pixel_frame=1.2e-7,

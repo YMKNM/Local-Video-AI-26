@@ -321,7 +321,25 @@ class PromptEngine:
             seed = random.randint(0, 2**32 - 1)
         
         # Build expanded prompt
+        #
+        # LTX-2 uses a Gemma3 text encoder with multi-layer hidden state
+        # packing.  With INT8 quantization the conditioning signal is
+        # weaker, so we add more descriptive detail to strengthen it.
+        # Short prompts (< ~10 words) generate mostly padding tokens
+        # whose positions are filled with learnable registers in the
+        # connectors, diluting the real prompt signal.
         expanded_parts = [prompt]
+
+        # ── LTX-2 specific: boost short prompts ─────────────
+        if model_family == "ltx2" and len(prompt.split()) < 15:
+            # Prefix with a concrete scene description to give the
+            # text encoder more tokens to attend to.
+            scene_prefix = (
+                "A high quality video showing"
+            )
+            # Only prepend if the user hasn't already started with it
+            if not prompt.lower().startswith(("a video", "video of", "a high quality")):
+                expanded_parts = [f"{scene_prefix} {prompt}"]
         
         # Add camera motion tags — but SKIP the auto-detected "static" default.
         # Appending "static shot" to a prompt like "dancing chicken" actively
@@ -349,6 +367,14 @@ class PromptEngine:
             quality_tags = prompt_config.get('quality_tags', [
                 "high quality", "detailed", "professional"
             ])
+            # LTX-2: append extra descriptive tags that help INT8
+            # quantised text encoders produce stronger conditioning.
+            if model_family == "ltx2":
+                quality_tags = [
+                    "best quality", "highly detailed",
+                    "smooth motion", "sharp focus",
+                    "professional cinematography",
+                ]
             expanded_parts.extend(quality_tags)
         
         # Combine into final prompt

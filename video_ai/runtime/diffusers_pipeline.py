@@ -431,8 +431,96 @@ class DiffusersPipeline:
         if spec.family == "ltx2":
             call_kwargs["frame_rate"] = float(spec.native_fps)
 
+        # ── Diagnostic logging — prompt & conditioning ────
+        logger.info(f"[PROMPT] Positive: {prompt[:200]}")
+        logger.info(f"[PROMPT] Negative: {(negative_prompt or 'None')[:200]}")
+        logger.info(
+            f"[PARAMS] guidance={guidance_scale}, steps={num_inference_steps}, "
+            f"frames={num_frames}, size={width}x{height}"
+        )
+
+        # ── Embedding validation hook (LTX-2 only) ───────
+        # Monkey-patch encode_prompt to validate embeddings
+        # after text encoding, catching NaN/inf/all-zeros that
+        # would produce video unrelated to the prompt.
+        _orig_encode = None
+        if spec.family == "ltx2" and hasattr(self._pipe, 'encode_prompt'):
+            _orig_encode = self._pipe.encode_prompt
+
+            def _validated_encode(*args, **kwargs):
+                result = _orig_encode(*args, **kwargs)
+                prompt_embeds = result[0]
+                if prompt_embeds is not None:
+                    _emb = prompt_embeds.float()
+                    has_nan = torch.isnan(_emb).any().item()
+                    has_inf = torch.isinf(_emb).any().item()
+                    all_zero = (_emb.abs().sum().item() == 0.0)
+                    emb_mean = _emb.mean().item()
+                    emb_std = _emb.std().item()
+                    emb_min = _emb.min().item()
+                    emb_max = _emb.max().item()
+                    logger.info(
+                        f"[EMBED] shape={list(prompt_embeds.shape)}, "
+                        f"dtype={prompt_embeds.dtype}, "
+                        f"mean={emb_mean:.4f}, std={emb_std:.4f}, "
+                        f"min={emb_min:.4f}, max={emb_max:.4f}"
+                    )
+                    if has_nan:
+                        logger.error(
+                            "[EMBED] ⚠ NaN detected in prompt embeddings! "
+                            "Text encoder output is corrupt. This will "
+                            "cause the video to be unrelated to the prompt."
+                        )
+                    if has_inf:
+                        logger.error(
+                            "[EMBED] ⚠ Inf detected in prompt embeddings! "
+                            "Text encoder output has overflow."
+                        )
+                    if all_zero:
+                        logger.error(
+                            "[EMBED] ⚠ All-zero prompt embeddings! "
+                            "Text encoder produced no conditioning signal. "
+                            "The video will be unconditional (random)."
+                        )
+                return result
+
+            self._pipe.encode_prompt = _validated_encode
+
+        # ── Connector output validation hook (LTX-2) ─────
+        _connector_hook_handle = None
+        if spec.family == "ltx2" and hasattr(self._pipe, 'connectors'):
+            def _connector_post_hook(module, input, output):
+                if isinstance(output, (tuple, list)) and len(output) >= 2:
+                    vid_emb, aud_emb = output[0], output[1]
+                    for label, emb in [("video", vid_emb), ("audio", aud_emb)]:
+                        if emb is None:
+                            continue
+                        _e = emb.float()
+                        logger.info(
+                            f"[CONNECTOR-{label}] shape={list(emb.shape)}, "
+                            f"dtype={emb.dtype}, "
+                            f"mean={_e.mean().item():.4f}, "
+                            f"std={_e.std().item():.4f}, "
+                            f"NaN={torch.isnan(_e).any().item()}, "
+                            f"Inf={torch.isinf(_e).any().item()}"
+                        )
+                        if torch.isnan(_e).any():
+                            logger.error(
+                                f"[CONNECTOR-{label}] ⚠ NaN in connector "
+                                f"output! Conditioning is corrupt."
+                            )
+            _connector_hook_handle = self._pipe.connectors.register_forward_hook(
+                _connector_post_hook
+            )
+
         with torch.inference_mode():
             output = self._pipe(**call_kwargs)
+
+        # Clean up hooks
+        if _connector_hook_handle is not None:
+            _connector_hook_handle.remove()
+        if _orig_encode is not None:
+            self._pipe.encode_prompt = _orig_encode
 
         elapsed = time.time() - start
         logger.info(f"Diffusion completed in {elapsed:.1f}s ({elapsed/60:.1f} min)")
